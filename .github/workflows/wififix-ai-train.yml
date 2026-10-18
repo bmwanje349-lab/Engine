@@ -42,12 +42,14 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: tools/wififix-ai/training_state
-          key: wififix-ai-v2-${{ github.run_id }}-${{ github.run_attempt }}
+          key: wififix-ai-v3-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            wififix-ai-v2-
+            wififix-ai-v3-
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -v
+      - name: Validate authoritative Termux recovery script syntax
+        run: bash -n recovery/wififix_pro_v2.sh
       - name: Set bounded training parameters
         id: cfg
         shell: bash
@@ -73,7 +75,9 @@ jobs:
         run: |
           python - <<'PY'
           import json, os
-          from wififix_ai.network import WiFiFixBrain, MIN_MODEL_BYTES
+          from wififix_ai.network import WiFiFixBrain, MIN_MODEL_BYTES, MIN_PARAMETER_COUNT
+          from train import (MIN_CAUSE_ACCURACY, MIN_ACTION_ACCURACY,
+                             MIN_CAUSE_BALANCED_ACCURACY, MIN_ACTION_BALANCED_ACCURACY)
           from wififix_ai.schema import encode_observation
           from wififix_ai.planner import plan_diagnostics
           metrics = json.load(open('artifacts/metrics.json', encoding='utf-8'))
@@ -83,10 +87,14 @@ jobs:
               'internet_loss_pct': 0, 'dns_ok': 1
           }).reshape(1, -1))
           assert os.path.getsize('artifacts/brain.npz') >= MIN_MODEL_BYTES
-          assert model.parameter_count >= 6_000_000
+          assert model.parameter_count >= MIN_PARAMETER_COUNT
           assert causes.shape[1] == 8 and actions.shape[1] == 7
-          assert metrics['loss_improved']
           assert metrics['minimum_20_mb_met']
+          validation = metrics['final_synthetic_validation']
+          assert validation['cause_accuracy'] >= MIN_CAUSE_ACCURACY
+          assert validation['action_accuracy'] >= MIN_ACTION_ACCURACY
+          assert validation['cause_balanced_accuracy'] >= MIN_CAUSE_BALANCED_ACCURACY
+          assert validation['action_balanced_accuracy'] >= MIN_ACTION_BALANCED_ACCURACY
           result = plan_diagnostics(causes[0], observation={'connected': 1}, max_depth=3, top_paths=3)
           assert len(result['candidate_paths']) == 3
           assert len({p['test'] for p in result['candidate_paths']}) == 3
