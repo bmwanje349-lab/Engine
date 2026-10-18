@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproducible WiFiFix v2 training with independent synthetic validation."""
+"""Reproducible WiFiFix v3 training with multi-seed synthetic validation."""
 import argparse
 import json
 import time
@@ -166,8 +166,8 @@ def main():
     final_metrics = {
         "cause_accuracy": accuracy(cause_predictions, ycv),
         "action_accuracy": accuracy(action_predictions, yav),
-        "cause_balanced_accuracy": float(np.mean(list(cause_recalls.values()))),
-        "action_balanced_accuracy": float(np.mean(list(action_recalls.values()))),
+        "cause_balanced_accuracy": balanced_accuracy(ycv, cause_predictions, CAUSES),
+        "action_balanced_accuracy": balanced_accuracy(yav, action_predictions, ACTIONS),
         "cause_class_recall": cause_recalls,
         "action_class_recall": action_recalls,
         "cause_cross_entropy": float(-np.log(np.maximum(pc[np.arange(len(Xv)), ycv], 1e-8)).mean()),
