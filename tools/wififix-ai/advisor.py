@@ -5,31 +5,79 @@ import json
 import socket
 import sys
 
-from wififix_ai.schema import CAUSES, ACTIONS, encode_observation
+from wififix_ai.schema import CAUSES, ACTIONS, encode_observation, number
 from wififix_ai.network import WiFiFixBrain, MODEL_NAME
 from wififix_ai.planner import plan_diagnostics
 
 
 def gate(obs, cause, cause_conf, action, action_conf):
-    if float(obs.get("connected", 1) or 0) < .5:
+    connected = number(obs, "connected")
+    if connected is None:
+        return "GATHER_MORE_EVIDENCE", "Connection state was not measured; no diagnosis should assume Wi-Fi is connected."
+    if connected < .5:
         return "GATHER_MORE_EVIDENCE", "Wi-Fi is disconnected; no radio toggle will be recommended."
-    reliability = float(obs.get("measurement_reliability", 0) or 0)
+
+    reliability_value = number(obs, "measurement_reliability", 0.0)
+    reliability = 0.0 if reliability_value is None else reliability_value
     if cause_conf < .55 or action_conf < .50 or reliability < .35:
         return "GATHER_MORE_EVIDENCE", "Confidence or measurement coverage is too low."
-    rssi = float(obs.get("rssi_dbm", -65) or -65)
-    gw_loss = float(obs.get("gateway_loss_pct", -1) if obs.get("gateway_loss_pct") is not None else -1)
-    dns = float(obs.get("dns_ok", -1) if obs.get("dns_ok") is not None else -1)
-    reconnect_rate = float(obs.get("reconnect_success_rate", -1) if obs.get("reconnect_success_rate") is not None else -1)
-    if action == "RECONNECT_WIFI" and (cause != "ROUTER_PATH" or gw_loss < 20 or rssi < -78 or reconnect_rate < .30):
+
+    rssi_value = number(obs, "rssi_dbm")
+    rssi = -101.0 if rssi_value is None else rssi_value
+    gw_loss_value = number(obs, "gateway_loss_pct")
+    gw_loss = -1.0 if gw_loss_value is None else gw_loss_value
+    dns_value = number(obs, "dns_ok")
+    dns = -1.0 if dns_value is None else dns_value
+    reconnect_value = number(obs, "reconnect_success_rate")
+    reconnect_rate = -1.0 if reconnect_value is None else reconnect_value
+
+    if action == "RECONNECT_WIFI" and (
+        cause != "ROUTER_PATH" or gw_loss < 20 or rssi < -78 or reconnect_rate < .30
+    ):
         return "GATHER_MORE_EVIDENCE", "No independent router-path evidence or useful reconnect history."
     if action == "CHECK_DNS" and dns != 0:
         return "GATHER_MORE_EVIDENCE", "DNS failure was not measured."
-    if action == "CHECK_SIGNAL" and rssi > -72:
+    if action == "CHECK_SIGNAL" and (rssi_value is None or rssi > -72):
         return "GATHER_MORE_EVIDENCE", "Signal measurement does not support weak-signal diagnosis."
     if action == "WAIT_OR_CONTACT_ISP" and gw_loss >= 20:
         return "GATHER_MORE_EVIDENCE", "Router-path fault is not isolated from an upstream fault."
     return action, "Passed the conservative advisory gate."
 
+
+def maybe_probe_dns(obs, enabled=False):
+    """Optional DNS probe; never infer DNS failure unless an IP path first works."""
+    if not enabled:
+        return "not_requested"
+    if not isinstance(obs, dict) or not obs:
+        return "skipped_no_observation"
+
+    connected = number(obs, "connected")
+    if connected is None or connected < .5:
+        return "skipped_connection_unconfirmed"
+    existing_dns = number(obs, "dns_ok")
+    if existing_dns in (0.0, 1.0):
+        return "skipped_dns_already_measured"
+
+    # A failed hostname lookup alone cannot distinguish DNS failure from no internet.
+    # First require a successful connection to a literal IP address.
+    try:
+        with socket.create_connection(("1.1.1.1", 443), timeout=2):
+            pass
+    except OSError:
+        return "skipped_ip_connectivity_unconfirmed"
+
+    try:
+        socket.getaddrinfo("connectivitycheck.gstatic.com", 443, type=socket.SOCK_STREAM)
+    except OSError:
+        obs["dns_ok"] = 0
+        previous_failures = number(obs, "dns_failures", 0.0)
+        obs["dns_failures"] = max(1.0, 0.0 if previous_failures is None else previous_failures)
+        obs.setdefault("measurement_reliability", .55)
+        return "failed_after_ip_connectivity_confirmed"
+
+    obs["dns_ok"] = 1
+    obs.setdefault("measurement_reliability", .55)
+    return "resolved_after_ip_connectivity_confirmed"
 
 def advise(model_path, obs):
     model = WiFiFixBrain.load(model_path)
@@ -70,6 +118,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="artifacts/brain.npz")
     parser.add_argument("--input-json", default="")
+    parser.add_argument("--probe-dns", action="store_true", help="Opt in to a guarded DNS probe; only a DNS failure after IP connectivity succeeds is recorded.")
     args = parser.parse_args()
     if args.input_json:
         with open(args.input_json, encoding="utf-8") as stream:
@@ -79,16 +128,12 @@ def main():
         obs = json.loads(raw) if raw else {}
     else:
         obs = {}
-    if "dns_ok" not in obs:
-        try:
-            socket.getaddrinfo("connectivitycheck.gstatic.com", 443, type=socket.SOCK_STREAM)
-            obs["dns_ok"] = 1
-            obs.setdefault("measurement_reliability", .55)
-        except OSError:
-            obs["dns_ok"] = 0
-            obs.setdefault("dns_failures", 1)
-            obs.setdefault("measurement_reliability", .55)
-    print(json.dumps(advise(args.model, obs), sort_keys=True))
+    if not isinstance(obs, dict):
+        raise SystemExit("input JSON must be an observation object")
+    dns_probe_status = maybe_probe_dns(obs, enabled=args.probe_dns)
+    result = advise(args.model, obs)
+    result["dns_probe_status"] = dns_probe_status
+    print(json.dumps(result, sort_keys=True))
 
 
 if __name__ == "__main__":

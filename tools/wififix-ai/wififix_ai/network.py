@@ -3,10 +3,11 @@ from pathlib import Path
 import numpy as np
 from .schema import N_FEATURES, CAUSES, ACTIONS
 
-ARCHITECTURE_VERSION = 2
-HIDDEN_SIZES = (4096, 1536)
-MODEL_NAME = "WiFiFixBrain-v2-multipath"
+ARCHITECTURE_VERSION = 3
+HIDDEN_SIZES = (3072, 1664)
+MODEL_NAME = "WiFiFixBrain-v3-multipath"
 MIN_MODEL_BYTES = 20_000_000
+MIN_PARAMETER_COUNT = 5_200_000
 PARAMETER_NAMES = ("W1", "b1", "W2", "b2", "Wc", "bc", "Wa", "ba")
 
 
@@ -25,9 +26,9 @@ def onehot(y, size):
 class WiFiFixBrain:
     """Two shared representation layers and cause/action prediction heads.
 
-    The saved checkpoint contains more than 6.4 million trainable float32
-    parameters. We intentionally store those learned arrays uncompressed so
-    the checkpoint's size reflects real parameters, not artificial padding.
+    The saved checkpoint contains more than 5.2 million trainable float32
+    parameters (about 20.96 MB decimal of actual weights). The architecture
+    stays close to the required 20 MB floor without padding or duplicate data.
     """
 
     def __init__(self, seed=0):
@@ -128,7 +129,7 @@ class WiFiFixBrain:
     def save(self, path):
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        if self.parameter_count < 6_000_000 or self.trainable_bytes < MIN_MODEL_BYTES:
+        if self.parameter_count < MIN_PARAMETER_COUNT or self.trainable_bytes < MIN_MODEL_BYTES:
             raise ValueError("model has too few trainable parameters for the configured minimum")
         payload = self._params()
         payload["architecture_version"] = np.asarray([ARCHITECTURE_VERSION], dtype=np.int32)
