@@ -1,4 +1,4 @@
-name: WiFiFix AI - test and train
+name: WiFiFix AI - test, train and publish
 on:
   push:
     paths:
@@ -11,13 +11,13 @@ on:
   workflow_dispatch:
     inputs:
       samples:
-        description: Synthetic examples, 1000 to 250000
+        description: Synthetic training examples, 1000 to 250000
         required: false
-        default: '24000'
+        default: '16000'
       epochs:
-        description: Training epochs, 1 to 120
+        description: Training epochs, 1 to 30
         required: false
-        default: '30'
+        default: '8'
   schedule:
     - cron: '37 2 * * *'
 permissions:
@@ -25,7 +25,10 @@ permissions:
 jobs:
   train:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 35
+    env:
+      OPENBLAS_NUM_THREADS: '2'
+      OMP_NUM_THREADS: '2'
     defaults:
       run:
         working-directory: tools/wififix-ai
@@ -39,9 +42,9 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: tools/wififix-ai/training_state
-          key: wififix-ai-${{ github.run_id }}-${{ github.run_attempt }}
+          key: wififix-ai-v2-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            wififix-ai-
+            wififix-ai-v2-
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -v
@@ -49,34 +52,50 @@ jobs:
         id: cfg
         shell: bash
         run: |
-          echo "samples=${{ github.event.inputs.samples || '24000' }}" >> "$GITHUB_OUTPUT"
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then echo "epochs=8" >> "$GITHUB_OUTPUT"; else echo "epochs=${{ github.event.inputs.epochs || '30' }}" >> "$GITHUB_OUTPUT"; fi
-      - name: Train from random weights or resume our checkpoint
+          echo "samples=${{ github.event.inputs.samples || '16000' }}" >> "$GITHUB_OUTPUT"
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            echo "epochs=3" >> "$GITHUB_OUTPUT"
+          else
+            echo "epochs=${{ github.event.inputs.epochs || '8' }}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Train from compatible own weights or initialize v2
         shell: bash
         run: |
           mkdir -p training_state artifacts
-          RESUME=()
-          if [[ -s training_state/brain.npz ]]; then RESUME=(--resume training_state/brain.npz); fi
-          python train.py --samples "${{ steps.cfg.outputs.samples }}" --epochs "${{ steps.cfg.outputs.epochs }}" --seed "${{ github.run_number }}" --out artifacts/brain.npz --metrics artifacts/metrics.json ${RESUME[@]}
+          if [[ -s training_state/brain.npz ]]; then
+            python train.py --samples "${{ steps.cfg.outputs.samples }}" --epochs "${{ steps.cfg.outputs.epochs }}" --seed "${{ github.run_number }}" --out artifacts/brain.npz --metrics artifacts/metrics.json --resume training_state/brain.npz
+          else
+            python train.py --samples "${{ steps.cfg.outputs.samples }}" --epochs "${{ steps.cfg.outputs.epochs }}" --seed "${{ github.run_number }}" --out artifacts/brain.npz --metrics artifacts/metrics.json
+          fi
           cp artifacts/brain.npz training_state/brain.npz
           cp artifacts/metrics.json training_state/metrics.json
-      - name: Validate artifact size and inference
+      - name: Validate model size, inference and alternate diagnostic paths
         run: |
           python - <<'PY'
           import json, os
-          from wififix_ai.network import WiFiFixBrain
+          from wififix_ai.network import WiFiFixBrain, MIN_MODEL_BYTES
           from wififix_ai.schema import encode_observation
-          metrics = json.load(open('artifacts/metrics.json'))
+          from wififix_ai.planner import plan_diagnostics
+          metrics = json.load(open('artifacts/metrics.json', encoding='utf-8'))
           model = WiFiFixBrain.load('artifacts/brain.npz')
-          causes, actions = model.probabilities(encode_observation({'connected':1,'rssi_dbm':-55,'gateway_loss_pct':0,'internet_loss_pct':0,'dns_ok':1}).reshape(1,-1))
-          assert os.path.getsize('artifacts/brain.npz') < 18000000
+          causes, actions = model.probabilities(encode_observation({
+              'connected': 1, 'rssi_dbm': -55, 'gateway_loss_pct': 0,
+              'internet_loss_pct': 0, 'dns_ok': 1
+          }).reshape(1, -1))
+          assert os.path.getsize('artifacts/brain.npz') >= MIN_MODEL_BYTES
+          assert model.parameter_count >= 6_000_000
           assert causes.shape[1] == 8 and actions.shape[1] == 7
           assert metrics['loss_improved']
-          print('Tests passed; field validation remains unclaimed.')
+          assert metrics['minimum_20_mb_met']
+          result = plan_diagnostics(causes[0], observation={'connected': 1}, max_depth=3, top_paths=3)
+          assert len(result['candidate_paths']) == 3
+          assert len({p['test'] for p in result['candidate_paths']}) == 3
+          print('V2 size, model inference, independent synthetic metrics and multi-path planning passed.')
+          print('Real-world accuracy remains unclaimed until verified field data are collected.')
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: wififix-ai-brain-${{ github.run_number }}
+          name: wififix-ai-v2-${{ github.run_number }}
           path: |
             tools/wififix-ai/artifacts/brain.npz
             tools/wififix-ai/artifacts/metrics.json
