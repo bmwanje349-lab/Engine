@@ -1,27 +1,49 @@
 # WiFiFix AI Engine
 
-An original, compact neural network trained from random initialization to classify Wi-Fi fault patterns and rank advisory actions. No pretrained model or pretrained weights are downloaded or loaded.
+WiFiFix AI is an experimental Wi-Fi diagnostic adviser. The original adaptive Termux recovery script remains a separate safety layer; the neural adviser never directly toggles Wi-Fi.
 
-## Run
-Install Python 3.11+ and NumPy, then run:
+## What changed in v2
+
+- **Substantive model size:** two trainable hidden layers (4096, 1536) and independent fault-cause/action heads, about 6.45 million trainable float32 parameters. The uncompressed parameter checkpoint is approximately 25.8 MB decimal. It is not padded or filled with duplicate data.
+- **Chess-style diagnostic look-ahead:** bounded expectimax-style search examines up to three tests ahead. Each test branches into possible outcomes, updates the fault-cause probabilities with Bayes' rule, and searches for the best follow-up test for each branch.
+- **Three different candidate routes:** the adviser returns three different first-test choices with contingent branches, rather than treating one fixed troubleshooting sequence as correct for every case.
+- **Independent synthetic validation:** metrics are calculated on a separate simulator seed, not on the training rows.
+- **Optional verified field training:** privacy-scrubbed and human-verified JSONL records can be used as additional training examples. They are not described as a real-world validation set.
+- **Conservative operation:** recommendations are advisory; no automatic Wi-Fi control is performed by the model.
+
+## Run locally
+
+Use Python 3.11+:
 
     python -m pip install -r requirements.txt
     python -m unittest discover -s tests -v
-    python train.py --samples 24000 --epochs 30 --seed 410
+    python train.py --samples 16000 --epochs 8 --seed 410
     python advisor.py --model artifacts/brain.npz
 
-Send one JSON observation to advisor.py through standard input or pass --input-json. Example:
+The trained model and metrics are written to the artifacts directory. A model-size gate rejects a saved checkpoint below 20,000,000 bytes. The bytes come from trainable weights stored as float32; file padding is not used.
+
+To inspect one observation:
 
     echo '{"connected":1,"rssi_dbm":-55,"gateway_rtt_ms":5,"gateway_loss_pct":0,"internet_rtt_ms":28,"internet_loss_pct":0,"dns_ok":1,"download_mbps":40,"baseline_mbps":45,"sample_count":15,"reconnect_success_rate":0.75,"measurement_reliability":1}' | python advisor.py --model artifacts/brain.npz
 
-## Model and learning
-The feature encoder, synthetic Wi-Fi condition simulator, multi-head neural network, backpropagation, training loop, and inference are implemented in this repository. The first training data are generated from a deterministic synthetic simulator. High accuracy on this simulator means the model learned its generated patterns; it is not evidence that real Wi-Fi faults are diagnosed at the same accuracy.
+The JSON includes candidate_diagnostic_paths. Each path includes possible outcomes, estimated outcome probabilities, updated cause hypotheses, and the next test for each sufficiently likely branch. These are planning estimates, not promises that a real network will follow a branch exactly.
 
-The compact network should not be padded to reach an 18 MB file size. Size is not a quality metric. Future architecture growth must be justified by held-out performance and real-device training data.
+## Training and evidence limits
 
-GitHub Actions tests the code, trains the model, verifies the artifact, and publishes the brain and metrics as a workflow artifact. Hosted runners cannot directly observe the user's phone. Scheduled training uses synthetic examples unless privacy-scrubbed, verified field labels are supplied.
+The neural network is initialized from random weights; no pretrained model or pretrained parameters are loaded. Synthetic examples let the code be tested repeatably, but accuracy on synthetic data only measures how well it learns the simulator's assumptions. It is not proof of diagnosis accuracy on real routers.
 
-## Safety
-The AI only advises. Weak confidence, missing measurements, a disconnected network, or conflicting evidence produces GATHER_MORE_EVIDENCE. The AI is not permitted to switch the radio. Existing recovery logic remains in control until real-world evaluation supports a deliberate integration.
+For optional field training, create data/real_training.jsonl using one JSON object per line with these fields:
 
-Never upload SSIDs, IP or MAC addresses, Wi-Fi passwords, tokens, or other identifying telemetry. Keep only the measurements needed for diagnosis.
+- observation: measurements accepted by encode_observation
+- fault_label: one of the fault causes in schema.py
+- action_label: one of the advisory actions in schema.py
+- review_status: must be verified
+- privacy_scrubbed: must be the boolean true
+
+Only add examples with a reliable human-verified label and remove SSIDs, passwords, IP/MAC addresses, tokens, exact locations, and unrelated identifying telemetry. The .example file is illustrative only and is deliberately rejected by the field loader. Field examples are used for training, but the current validation report is still synthetic; real-field accuracy stays unknown until an independently held-out, human-verified field set is evaluated.
+
+GitHub Actions runs tests, training, independent synthetic checks, inference checks, model-size checks, and multi-path planning checks. Successful runs publish the model and metrics as a workflow artifact. Compatible v2 weights may be resumed from the Actions cache; old v1 checkpoints are discarded rather than silently loaded.
+
+## Scope and safety
+
+The model ranks likely causes and advisory actions; the planner compares possible diagnostic paths. Neither can prove an internet provider or router is at fault without reliable measurements. The existing recovery logic remains authoritative. Weak confidence, disconnected Wi-Fi, incomplete observations, or conflicting evidence should lead to gathering more evidence rather than an automatic radio change.
