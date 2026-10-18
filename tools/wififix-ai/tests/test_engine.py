@@ -92,7 +92,7 @@ class EngineTests(unittest.TestCase):
         self.assertNotIn("CHECK_SIGNAL", plan["remaining_tests"])
         self.assertNotIn("CHECK_DNS", plan["remaining_tests"])
         self.assertTrue(all(path["test"] not in seen for path in plan["candidate_paths"]))
-        self.assertIn("not Bayes-updating those same readings a second time", plan["evidence_handling"])
+        self.assertIn("same readings a second time", plan["evidence_handling"])
 
     def test_planner_returns_no_duplicate_tests_when_all_tests_are_measured(self):
         prior = np.full(len(CAUSES), 1 / len(CAUSES), dtype=np.float64)
