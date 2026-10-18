@@ -60,7 +60,7 @@ jobs:
           else
             echo "epochs=${{ github.event.inputs.epochs || '8' }}" >> "$GITHUB_OUTPUT"
           fi
-      - name: Train from compatible own weights or initialize v2
+      - name: Train from compatible own weights or initialize v3
         shell: bash
         run: |
           mkdir -p training_state artifacts
@@ -98,12 +98,12 @@ jobs:
           result = plan_diagnostics(causes[0], observation={'connected': 1}, max_depth=3, top_paths=3)
           assert len(result['candidate_paths']) == 3
           assert len({p['test'] for p in result['candidate_paths']}) == 3
-          print('V2 size, model inference, independent synthetic metrics and multi-path planning passed.')
+          print('V3 size, model inference, multi-seed synthetic metrics and evidence-aware multi-path planning passed.')
           print('Real-world accuracy remains unclaimed until verified field data are collected.')
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: wififix-ai-v2-${{ github.run_number }}
+          name: wififix-ai-v3-${{ github.run_number }}
           path: |
             tools/wififix-ai/artifacts/brain.npz
             tools/wififix-ai/artifacts/metrics.json
