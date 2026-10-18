@@ -1,0 +1,85 @@
+name: WiFiFix AI - test and train
+on:
+  push:
+    paths:
+      - 'tools/wififix-ai/**'
+      - '.github/workflows/wififix-ai-train.yml'
+  pull_request:
+    paths:
+      - 'tools/wififix-ai/**'
+      - '.github/workflows/wififix-ai-train.yml'
+  workflow_dispatch:
+    inputs:
+      samples:
+        description: Synthetic examples, 1000 to 250000
+        required: false
+        default: '24000'
+      epochs:
+        description: Training epochs, 1 to 120
+        required: false
+        default: '30'
+  schedule:
+    - cron: '37 2 * * *'
+permissions:
+  contents: read
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: tools/wififix-ai
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: tools/wififix-ai/requirements.txt
+      - uses: actions/cache@v4
+        with:
+          path: tools/wififix-ai/training_state
+          key: wififix-ai-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            wififix-ai-
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -v
+      - name: Set bounded training parameters
+        id: cfg
+        shell: bash
+        run: |
+          echo "samples=${{ github.event.inputs.samples || '24000' }}" >> "$GITHUB_OUTPUT"
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then echo "epochs=8" >> "$GITHUB_OUTPUT"; else echo "epochs=${{ github.event.inputs.epochs || '30' }}" >> "$GITHUB_OUTPUT"; fi
+      - name: Train from random weights or resume our checkpoint
+        shell: bash
+        run: |
+          mkdir -p training_state artifacts
+          RESUME=()
+          if [[ -s training_state/brain.npz ]]; then RESUME=(--resume training_state/brain.npz); fi
+          python train.py --samples "${{ steps.cfg.outputs.samples }}" --epochs "${{ steps.cfg.outputs.epochs }}" --seed "${{ github.run_number }}" --out artifacts/brain.npz --metrics artifacts/metrics.json ${RESUME[@]}
+          cp artifacts/brain.npz training_state/brain.npz
+          cp artifacts/metrics.json training_state/metrics.json
+      - name: Validate artifact size and inference
+        run: |
+          python - <<'PY'
+          import json, os
+          from wififix_ai.network import WiFiFixBrain
+          from wififix_ai.schema import encode_observation
+          metrics = json.load(open('artifacts/metrics.json'))
+          model = WiFiFixBrain.load('artifacts/brain.npz')
+          causes, actions = model.probabilities(encode_observation({'connected':1,'rssi_dbm':-55,'gateway_loss_pct':0,'internet_loss_pct':0,'dns_ok':1}).reshape(1,-1))
+          assert os.path.getsize('artifacts/brain.npz') < 18000000
+          assert causes.shape[1] == 8 and actions.shape[1] == 7
+          assert metrics['loss_improved']
+          print('Tests passed; field validation remains unclaimed.')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wififix-ai-brain-${{ github.run_number }}
+          path: |
+            tools/wififix-ai/artifacts/brain.npz
+            tools/wififix-ai/artifacts/metrics.json
+            tools/wififix-ai/artifacts/brain_manifest.json
+          if-no-files-found: error
+          retention-days: 30
