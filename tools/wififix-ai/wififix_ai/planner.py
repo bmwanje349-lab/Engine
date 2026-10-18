@@ -108,7 +108,7 @@ def _evaluate_test(belief, test, remaining, depth, observation):
         child = None
         if depth > 1 and remaining and outcome_probability >= .025:
             child = _best_node(posterior, remaining, depth - 1, observation)
-            expected_future += outcome_probability * child["score"]
+            expected_future += outcome_probability * child["search_score"]
         expected_entropy += outcome_probability * entropy_bits(posterior)
         branch_records[outcome] = {
             "probability": round(float(outcome_probability), 4),
