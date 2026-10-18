@@ -121,7 +121,7 @@ class EngineTests(unittest.TestCase):
 
     def test_dns_probe_does_not_call_dns_when_ip_connectivity_is_unconfirmed(self):
         obs = {"connected": 1}
-        with patch("advisor.socket.create_connection", side_effect=OSError("offline")) as ip_probe, \\
+        with patch("advisor.socket.create_connection", side_effect=OSError("offline")) as ip_probe, \
              patch("advisor.socket.getaddrinfo") as dns_probe:
             status = maybe_probe_dns(obs, enabled=True)
         self.assertEqual(status, "skipped_ip_connectivity_unconfirmed")
