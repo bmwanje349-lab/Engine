@@ -8,12 +8,53 @@ import sys
 import numpy as np
 
 from wififix_ai.simulator import generate_dataset
-from wififix_ai.network import WiFiFixBrain, MODEL_NAME, MIN_MODEL_BYTES
+from wififix_ai.network import (WiFiFixBrain, MODEL_NAME, MIN_MODEL_BYTES,
+                                ARCHITECTURE_VERSION, HIDDEN_SIZES, MIN_PARAMETER_COUNT)
 from wififix_ai.schema import CAUSES, ACTIONS, N_FEATURES, FEATURE_NAMES, encode_observation
 
 
 def accuracy(a, b):
     return float(np.mean(np.asarray(a) == np.asarray(b)))
+
+
+MIN_CAUSE_ACCURACY = 0.65
+MIN_ACTION_ACCURACY = 0.58
+MIN_CAUSE_BALANCED_ACCURACY = 0.58
+MIN_ACTION_BALANCED_ACCURACY = 0.52
+
+
+def per_class_recall(actual, predicted, class_names):
+    actual = np.asarray(actual)
+    predicted = np.asarray(predicted)
+    recalls = {}
+    for index, name in enumerate(class_names):
+        selected = actual == index
+        recalls[name] = float(np.mean(predicted[selected] == index)) if selected.any() else 0.0
+    return recalls
+
+
+def balanced_accuracy(actual, predicted, class_names):
+    recalls = per_class_recall(actual, predicted, class_names)
+    return float(np.mean(list(recalls.values()))) if recalls else 0.0
+
+
+def acceptance_failures(metrics):
+    """Return deterministic quality-gate failures; epoch-to-epoch loss is diagnostic only."""
+    failures = []
+    if not metrics.get("minimum_20_mb_met", False):
+        failures.append("trained model artifact is below the 20 MB requirement")
+    validation = metrics.get("final_synthetic_validation", {})
+    thresholds = (
+        ("cause_accuracy", MIN_CAUSE_ACCURACY),
+        ("action_accuracy", MIN_ACTION_ACCURACY),
+        ("cause_balanced_accuracy", MIN_CAUSE_BALANCED_ACCURACY),
+        ("action_balanced_accuracy", MIN_ACTION_BALANCED_ACCURACY),
+    )
+    for key, minimum in thresholds:
+        value = validation.get(key)
+        if value is None or not np.isfinite(value) or value < minimum:
+            failures.append(f"{key} below synthetic acceptance floor {minimum:.2f}")
+    return failures
 
 
 def load_verified_field_examples(path):
@@ -78,7 +119,15 @@ def main():
     started = time.time()
     X, yc, ya = generate_dataset(a.samples, a.seed)
     validation_count = max(2000, min(8000, a.samples // 4))
-    Xv, ycv, yav = generate_dataset(validation_count, a.seed + 1_000_003)
+    # Average over three independent simulator seeds so a single lucky or unlucky
+    # synthetic draw is less likely to decide whether CI accepts the model.
+    validation_sets = [
+        generate_dataset(validation_count, a.seed + offset)
+        for offset in (1_000_003, 2_000_033, 3_000_091)
+    ]
+    Xv = np.concatenate([part[0] for part in validation_sets], axis=0)
+    ycv = np.concatenate([part[1] for part in validation_sets], axis=0)
+    yav = np.concatenate([part[2] for part in validation_sets], axis=0)
     Xf, ycf, yaf = load_verified_field_examples(a.field_data)
     if len(Xf):
         X = np.concatenate((X, Xf), axis=0)
@@ -95,7 +144,7 @@ def main():
             resumed = True
         except (ValueError, OSError, KeyError) as exc:
             rejected_checkpoint = str(exc)
-            print("Ignoring incompatible cached checkpoint and training a fresh v2 model: " + rejected_checkpoint,
+            print("Ignoring incompatible cached checkpoint and training a fresh v3 model: " + rejected_checkpoint,
                   file=sys.stderr)
             model = WiFiFixBrain(a.seed)
     else:
@@ -110,16 +159,24 @@ def main():
     pc, pa = model.probabilities(Xv)
     out = Path(a.out)
     model.save(out)
+    cause_predictions = pc.argmax(1)
+    action_predictions = pa.argmax(1)
+    cause_recalls = per_class_recall(ycv, cause_predictions, CAUSES)
+    action_recalls = per_class_recall(yav, action_predictions, ACTIONS)
     final_metrics = {
-        "cause_accuracy": accuracy(pc.argmax(1), ycv),
-        "action_accuracy": accuracy(pa.argmax(1), yav),
+        "cause_accuracy": accuracy(cause_predictions, ycv),
+        "action_accuracy": accuracy(action_predictions, yav),
+        "cause_balanced_accuracy": float(np.mean(list(cause_recalls.values()))),
+        "action_balanced_accuracy": float(np.mean(list(action_recalls.values()))),
+        "cause_class_recall": cause_recalls,
+        "action_class_recall": action_recalls,
         "cause_cross_entropy": float(-np.log(np.maximum(pc[np.arange(len(Xv)), ycv], 1e-8)).mean()),
         "action_cross_entropy": float(-np.log(np.maximum(pa[np.arange(len(Xv)), yav], 1e-8)).mean()),
     }
     metrics = {
         "model": MODEL_NAME,
-        "architecture_version": 2,
-        "architecture": {"input_features": N_FEATURES, "hidden_layers": [4096, 1536],
+        "architecture_version": ARCHITECTURE_VERSION,
+        "architecture": {"input_features": N_FEATURES, "hidden_layers": list(HIDDEN_SIZES),
                           "prediction_heads": {"fault_cause": len(CAUSES), "advisory_action": len(ACTIONS)}},
         "parameter_count": model.parameter_count,
         "trainable_parameter_bytes": model.trainable_bytes,
@@ -135,6 +192,13 @@ def main():
         "field_examples_validated": 0,
         "training_samples_total": len(X),
         "validation_samples": len(Xv),
+        "validation_simulator_seeds": [a.seed + offset for offset in (1_000_003, 2_000_033, 3_000_091)],
+        "acceptance_thresholds": {
+            "cause_accuracy": MIN_CAUSE_ACCURACY,
+            "action_accuracy": MIN_ACTION_ACCURACY,
+            "cause_balanced_accuracy": MIN_CAUSE_BALANCED_ACCURACY,
+            "action_balanced_accuracy": MIN_ACTION_BALANCED_ACCURACY,
+        },
         "epochs": a.epochs,
         "initial_synthetic_validation": before,
         "final_synthetic_validation": final_metrics,
@@ -160,6 +224,7 @@ def main():
         "minimum_size_met": out.stat().st_size >= MIN_MODEL_BYTES,
         "parameter_count": model.parameter_count,
         "trainable_parameter_bytes": model.trainable_bytes,
+        "minimum_parameter_count": MIN_PARAMETER_COUNT,
         "trained_from_scratch": not resumed,
         "pretrained_model_loaded": False,
         "features": list(FEATURE_NAMES),
@@ -168,12 +233,9 @@ def main():
     Path("artifacts/brain_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(metrics, indent=2))
 
-    if not metrics["minimum_20_mb_met"]:
-        raise SystemExit("trained model artifact is below the 20 MB requirement")
-    if not metrics["loss_improved"]:
-        raise SystemExit("training loss did not improve")
-    if final_metrics["cause_accuracy"] < .55 or final_metrics["action_accuracy"] < .45:
-        raise SystemExit("independent synthetic validation fell below bootstrap acceptance thresholds")
+    failures = acceptance_failures(metrics)
+    if failures:
+        raise SystemExit("synthetic validation acceptance failed: " + "; ".join(failures))
 
 
 if __name__ == "__main__":
