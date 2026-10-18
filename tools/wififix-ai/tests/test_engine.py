@@ -134,10 +134,10 @@ class EngineTests(unittest.TestCase):
             "minimum_20_mb_met": True,
             "loss_improved": False,
             "final_synthetic_validation": {
-                "cause_accuracy": .66,
-                "action_accuracy": .59,
-                "cause_balanced_accuracy": .59,
-                "action_balanced_accuracy": .53,
+                "cause_accuracy": .92,
+                "action_accuracy": .90,
+                "cause_balanced_accuracy": .88,
+                "action_balanced_accuracy": .85,
             },
         }
         self.assertEqual(acceptance_failures(metrics), [])
