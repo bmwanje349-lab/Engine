@@ -57,7 +57,7 @@ jobs:
           mkdir -p training_state artifacts
           RESUME=()
           if [[ -s training_state/brain.npz ]]; then RESUME=(--resume training_state/brain.npz); fi
-          python train.py --samples "${{ steps.cfg.outputs.samples }}" --epochs "${{ steps.cfg.outputs.epochs }}" --seed "${{ github.run_number }}" --out artifacts/brain.npz --metrics artifacts/metrics.json "${{ RESUME[@] }}"
+          python train.py --samples "${{ steps.cfg.outputs.samples }}" --epochs "${{ steps.cfg.outputs.epochs }}" --seed "${{ github.run_number }}" --out artifacts/brain.npz --metrics artifacts/metrics.json ${RESUME[@]}
           cp artifacts/brain.npz training_state/brain.npz
           cp artifacts/metrics.json training_state/metrics.json
       - name: Validate artifact size and inference
