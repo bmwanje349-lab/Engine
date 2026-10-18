@@ -1,9 +1,20 @@
-# Status: bootstrap prototype
+# Status: WiFiFix AI v2 candidate
 
-Implemented in source: randomized neural model and custom backpropagation, 32-feature schema, synthetic condition simulator, training CLI, inference adviser, conservative safety gate, unit tests, and a repeatable GitHub Actions training workflow.
+## Implemented in this branch
 
-The earlier local prototype passed five unit tests and achieved approximately 99% label accuracy against independent synthetic examples. These are synthetic-generator results only. Real-world Wi-Fi accuracy is unknown and needs anonymized, verified field measurements.
+- Expanded the neural adviser to a two-hidden-layer network (4096 and 1536 units) with fault-cause and action heads.
+- Checkpoint stores 6.45 million trainable float32 parameters in an uncompressed NPZ archive. A 20,000,000-byte minimum is enforced by both model save code and the training workflow; no filler bytes or duplicate payloads are added.
+- Added an expectimax-style diagnostic planner. It evaluates alternate signal, gateway, internet, DNS, speed, and stability tests, branches on likely outcomes, updates cause beliefs, and returns the top three first-test routes with follow-up tests for each branch.
+- Added an independently seeded synthetic validation set, checkpoint compatibility checks, privacy-reviewed field-data loading, and tests for planner diversity and output size.
+- Kept the inference layer advisory-only. Wi-Fi radio switching remains disabled.
 
-The trained prototype checkpoint should be recreated by the GitHub Actions workflow and downloaded as an artifact. It will be much smaller than 18 MB; the model is not padded. The requested size is a ceiling/target to revisit only if additional data and architecture justify it.
+## Important limitations
 
-Pending: live GitHub Actions verification, real-device evaluation, model calibration, privacy-reviewed field data, and any controlled integration with the preserved existing WiFiFix recovery logic. Automatic AI-triggered Wi-Fi toggling remains disabled.
+- No pretrained model is loaded.
+- The model has only synthetic validation unless an operator explicitly supplies privacy-scrubbed, human-verified field examples.
+- Field examples added to training do not count as independent validation. Real-world accuracy remains unknown until a separate verified field evaluation is run.
+- A checkpoint exceeding 20 MB meets the file-size requirement, not a claim of superhuman or production-grade intelligence.
+
+## Release gate
+
+Pending: GitHub Actions on this branch must pass unit tests, training, independent synthetic checks, checkpoint-size checks, and the branching-planner validation. The trained model and metrics should be taken from the successful Actions artifact, not assumed from source code alone.
