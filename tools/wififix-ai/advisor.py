@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Inference-only adviser. It does not change Wi-Fi settings."""
+"""Inference-only WiFiFix adviser with multi-path diagnostic look-ahead."""
 import argparse
 import json
 import socket
 import sys
+
 from wififix_ai.schema import CAUSES, ACTIONS, encode_observation
-from wififix_ai.network import WiFiFixBrain
+from wififix_ai.network import WiFiFixBrain, MODEL_NAME
+from wififix_ai.planner import plan_diagnostics
+
 
 def gate(obs, cause, cause_conf, action, action_conf):
     if float(obs.get("connected", 1) or 0) < .5:
@@ -27,6 +30,7 @@ def gate(obs, cause, cause_conf, action, action_conf):
         return "GATHER_MORE_EVIDENCE", "Router-path fault is not isolated from an upstream fault."
     return action, "Passed the conservative advisory gate."
 
+
 def advise(model_path, obs):
     model = WiFiFixBrain.load(model_path)
     cause_probs, action_probs = model.probabilities(encode_observation(obs).reshape(1, -1))
@@ -34,11 +38,33 @@ def advise(model_path, obs):
     cause, action = CAUSES[ci], ACTIONS[ai]
     cc, ac = float(cause_probs[0, ci]), float(action_probs[0, ai])
     safe_action, reason = gate(obs, cause, cc, action, ac)
-    return {"model": "WiFiFixBrain-v1", "cause": cause, "cause_confidence": round(cc, 4),
-            "raw_action": action, "raw_action_confidence": round(ac, 4),
-            "advisory_action": safe_action, "gate_reason": reason,
-            "automatic_control": False, "field_validated": False,
-            "note": "Bootstrap brain trained on synthetic conditions; verify on real Wi-Fi first."}
+    planning = plan_diagnostics(cause_probs[0], observation=obs, max_depth=3, top_paths=3)
+    preferred = planning["candidate_paths"][0] if planning["candidate_paths"] else None
+    return {
+        "model": MODEL_NAME,
+        "cause": cause,
+        "cause_confidence": round(cc, 4),
+        "raw_action": action,
+        "raw_action_confidence": round(ac, 4),
+        "advisory_action": safe_action,
+        "gate_reason": reason,
+        "recommended_next_test": preferred["test"] if preferred else None,
+        "candidate_diagnostic_paths": planning["candidate_paths"],
+        "diagnostic_search": {
+            "strategy": planning["strategy"],
+            "search_depth": planning["search_depth"],
+            "root_entropy_bits": planning["root_entropy_bits"],
+            "top_cause_hypotheses": planning["cause_prior"][:3],
+            "interpretation": planning["interpretation"],
+        },
+        "automatic_control": False,
+        "field_validated": False,
+        "note": (
+            "The neural model is trained on synthetic conditions unless verified field examples "
+            "were explicitly supplied. Candidate paths are modeled diagnostic options, not guarantees."
+        ),
+    }
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -63,5 +89,7 @@ def main():
             obs.setdefault("dns_failures", 1)
             obs.setdefault("measurement_reliability", .55)
     print(json.dumps(advise(args.model, obs), sort_keys=True))
+
+
 if __name__ == "__main__":
     main()
