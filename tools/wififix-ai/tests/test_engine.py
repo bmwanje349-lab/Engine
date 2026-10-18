@@ -13,7 +13,8 @@ from wififix_ai.simulator import generate_dataset
 from wififix_ai.network import WiFiFixBrain, MIN_MODEL_BYTES, MIN_PARAMETER_COUNT, HIDDEN_SIZES
 from wififix_ai.planner import plan_diagnostics
 from advisor import gate, maybe_probe_dns
-from train import load_verified_field_examples, acceptance_failures
+from train import (load_verified_field_examples, acceptance_failures, MIN_CAUSE_ACCURACY,
+                    MIN_ACTION_ACCURACY, MIN_CAUSE_BALANCED_ACCURACY, MIN_ACTION_BALANCED_ACCURACY)
 
 
 class EngineTests(unittest.TestCase):
@@ -143,6 +144,25 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(acceptance_failures(metrics), [])
         metrics["final_synthetic_validation"]["cause_balanced_accuracy"] = .20
         self.assertTrue(any("cause_balanced_accuracy" in failure for failure in acceptance_failures(metrics)))
+
+    def test_quality_gate_floors_remain_strict_and_class_balanced(self):
+        self.assertEqual(MIN_CAUSE_ACCURACY, .90)
+        self.assertEqual(MIN_ACTION_ACCURACY, .88)
+        self.assertEqual(MIN_CAUSE_BALANCED_ACCURACY, .85)
+        self.assertEqual(MIN_ACTION_BALANCED_ACCURACY, .82)
+
+        acceptable = {
+            "minimum_20_mb_met": True,
+            "final_synthetic_validation": {
+                "cause_accuracy": .90,
+                "action_accuracy": .88,
+                "cause_balanced_accuracy": .85,
+                "action_balanced_accuracy": .82,
+            },
+        }
+        self.assertEqual(acceptance_failures(acceptable), [])
+        acceptable["final_synthetic_validation"]["action_balanced_accuracy"] = .819
+        self.assertTrue(any("action_balanced_accuracy" in item for item in acceptance_failures(acceptable)))
 
     def test_disconnected_gate_never_recommends_reconnect(self):
         action, _ = gate({"connected": 0, "measurement_reliability": 1},
