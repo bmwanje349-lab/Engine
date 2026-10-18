@@ -17,10 +17,10 @@ def accuracy(a, b):
     return float(np.mean(np.asarray(a) == np.asarray(b)))
 
 
-MIN_CAUSE_ACCURACY = 0.65
-MIN_ACTION_ACCURACY = 0.58
-MIN_CAUSE_BALANCED_ACCURACY = 0.58
-MIN_ACTION_BALANCED_ACCURACY = 0.52
+MIN_CAUSE_ACCURACY = 0.90
+MIN_ACTION_ACCURACY = 0.88
+MIN_CAUSE_BALANCED_ACCURACY = 0.85
+MIN_ACTION_BALANCED_ACCURACY = 0.82
 
 
 def per_class_recall(actual, predicted, class_names):
