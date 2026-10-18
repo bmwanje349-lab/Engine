@@ -6,7 +6,7 @@ WiFiFix AI is an experimental Wi-Fi diagnostic adviser. The authoritative adapti
 
 - **Substantive model size:** hidden layers (3072, 1664) with independent fault-cause/action heads, about 5.24 million trainable float32 parameters and approximately 20.96 MB decimal of actual weights. This stays close to the hard 20 MB minimum without padding or duplicate data.
 - **Chess-style diagnostic look-ahead:** bounded expectimax-style search examines up to three tests ahead. Each test branches into possible outcomes, updates the fault-cause probabilities with Bayes' rule, and searches for the best follow-up test for each branch.
-- **Three different candidate routes:** the adviser returns three different first-test choices with contingent branches, rather than treating one fixed troubleshooting sequence as correct for every case.
+- **Alternative diagnostic routes:** the adviser returns up to three distinct first-test choices with contingent branches, excluding tests already supported by adequate measurements rather than repeating a fixed troubleshooting sequence.
 - **Less noisy synthetic validation:** final scores pool three independent simulator seeds and report per-class recall plus class-balanced accuracy. CI uses stronger accuracy and balanced-accuracy floors, but those checks still measure simulator performance, not real-world diagnosis.
 - **Optional verified field training:** privacy-scrubbed and human-verified JSONL records can be used as additional training examples. They are not described as a real-world validation set.
 - **Conservative operation:** recommendations are advisory; no automatic Wi-Fi control is performed by the model.
@@ -35,6 +35,7 @@ The JSON includes candidate_diagnostic_paths. Each path includes possible outcom
 In Termux, install its dependencies and copy the script to a convenient location, for example:
 
     pkg install termux-api jq curl iproute2
+    cp recovery/wififix_pro_v2.sh ~/wififix_pro_v2.sh
     chmod 700 ~/wififix_pro_v2.sh
     bash ~/wififix_pro_v2.sh diagnose
     bash ~/wififix_pro_v2.sh start
