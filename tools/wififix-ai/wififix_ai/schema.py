@@ -42,7 +42,9 @@ def log_norm(value, maximum):
 
 def encode_observation(obs):
     """Turn a raw measurement dictionary into 32 bounded float32 features."""
-    connected = clip(number(obs, "connected", 1.0) or 0.0, 0.0, 1.0)
+    connected_value = number(obs, "connected")
+    # Missing connection state is unknown, not evidence of an active link.
+    connected = 0.5 if connected_value is None else clip(connected_value, 0.0, 1.0)
     rssi = number(obs, "rssi_dbm", -65.0)
     rssi = clip(-65.0 if rssi is None else rssi, -100.0, -30.0)
     link = number(obs, "link_speed_mbps", 0.0) or 0.0
@@ -97,7 +99,7 @@ def encode_observation(obs):
         clip(number(obs, "rssi_variance_db", 5.0) or 0.0, 0, 30) / 30.0,
         clip(number(obs, "rtt_variance_ms", 25.0) or 0.0, 0, 500) / 500.0,
         clip(number(obs, "drop_rate", 0.0) or 0.0, 0, 1),
-        clip(number(obs, "last_reconnect_success", 0.5) or 0.5, 0, 1),
+        clip(number(obs, "last_reconnect_success", 0.5), 0, 1),
         clip(number(obs, "seconds_since_fix", 300.0) or 0.0, 0, 3600) / 3600.0,
         clip(reliability, 0, 1),
     ]
