@@ -5,10 +5,30 @@ import argparse
 import json
 import sys
 
-from .benchmarks import FAMILIES, NimProblem, make_problem, nim_action_values, nim_hybrid_action_values
+from .action_encoding import encode_action_features
+from .benchmarks import FAMILIES, make_problem, nim_action_values, nim_hybrid_action_values
 from .gridworld import ACTIONS
 from .general_neural import GeneralNeuralPolicy
-from .search import plan
+from .search import SearchTree, plan
+
+
+def _action_values(problem, state, neural):
+    features = problem.features(state)
+    return {
+        action: neural.predict_action_value(
+            features, encode_action_features(features, action), action_name=action
+        )
+        for action in problem.actions(state)
+    }
+
+
+def _leaf_value(problem, state, neural):
+    features = problem.features(state)
+    if hasattr(neural, "supports_features") and not neural.supports_features(features):
+        return float(problem.evaluate(state))
+    if hasattr(neural, "predict_value_features"):
+        return float(neural.predict_value_features(features))
+    return max(_action_values(problem, state, neural).values(), default=0.0)
 
 
 def main():
@@ -30,47 +50,56 @@ def main():
         if not legal:
             decision = {"best_action": None, "alternatives": [], "terminal": True}
         elif args.family == "adversarial":
-            stones = int(state)
             if args.mode == "search":
-                values = nim_action_values(stones)
+                values = nim_action_values(int(state))
                 nodes = None
             elif args.mode == "hybrid":
-                values, nodes = nim_hybrid_action_values(stones, neural, depth=min(10, args.horizon))
+                values, nodes = nim_hybrid_action_values(
+                    int(state), neural, depth=min(10, args.horizon)
+                )
             else:
-                predicted = neural.predict_features(problem.features(state))
-                values = {a: float(predicted[ACTIONS.index(a)]) for a in legal}
+                values = _action_values(problem, state, neural)
                 nodes = 0
             ranked = sorted(
-                ({"first_action": a, "estimated_return": round(float(values[a]), 5)}
-                 for a in legal),
-                key=lambda row: row["estimated_return"], reverse=True)
-            decision = {"best_action": ranked[0]["first_action"], "alternatives": ranked,
-                        "terminal": False, "search_nodes": nodes,
-                        "warning": "Adversarial values are synthetic-game estimates; exact minimax is available in search mode."}
+                ({"first_action": action, "estimated_return": round(float(values[action]), 5)}
+                 for action in legal),
+                key=lambda row: row["estimated_return"], reverse=True,
+            )
+            decision = {
+                "best_action": ranked[0]["first_action"], "alternatives": ranked,
+                "terminal": False, "search_nodes": nodes,
+                "warning": "Adversarial values are synthetic-game estimates; exact minimax is available in search mode.",
+            }
         elif args.mode == "neural":
-            predicted = neural.predict_features(problem.features(state))
+            values = _action_values(problem, state, neural)
             ranked = sorted(
-                ({"first_action": a, "estimated_return": round(float(predicted[ACTIONS.index(a)]), 5)}
-                 for a in legal),
-                key=lambda row: row["estimated_return"], reverse=True)
+                ({"first_action": action, "estimated_return": round(float(values[action]), 5)}
+                 for action in legal),
+                key=lambda row: row["estimated_return"], reverse=True,
+            )
             decision = {"best_action": ranked[0]["first_action"], "alternatives": ranked,
-                        "terminal": False}
+                        "terminal": False, "selection": "action-conditioned Q(s,a)"}
         else:
             prior = None
+            value_evaluator = None
             if args.mode == "hybrid":
-                def prior(s, a):
+                def prior(s, action):
                     features = problem.features(s)
                     if hasattr(neural, "supports_features") and not neural.supports_features(features):
                         return 0.0
-                    values = neural.predict_features(features)
-                    legal_values = [values[ACTIONS.index(item)] for item in problem.actions(s)]
-                    center = sum(legal_values) / max(1, len(legal_values))
-                    return max(-1.0, min(1.0, (values[ACTIONS.index(a)] - center) / 5.0))
+                    return neural.predict_action_value(
+                        features, encode_action_features(features, action), action_name=action
+                    )
+                value_evaluator = lambda s: _leaf_value(problem, s, neural)
+            tree = SearchTree()
             result = plan(
                 problem, state, simulations=args.simulations, horizon=args.horizon,
                 seed=args.seed, top_k=5, action_prior=prior,
-                prior_weight=(0.0 if prior is None else 0.035))
+                prior_weight=(1.0 if prior is not None else 0.0),
+                value_evaluator=value_evaluator, tree=tree,
+            )
             decision = result
+        value_estimate = _leaf_value(problem, state, neural)
         print(json.dumps({
             "engine": "Strategic Reasoning AI",
             "family": args.family,
@@ -78,10 +107,11 @@ def main():
             "state": state,
             "features": problem.features(state),
             "legal_actions": legal,
+            "state_value_estimate": round(float(value_estimate), 5),
             "decision": decision,
             "validation_notice": "Experimental synthetic planner; evaluate before relying on decisions.",
         }, indent=2, sort_keys=True))
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, json.JSONDecodeError, TypeError) as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         raise SystemExit(2)
 
