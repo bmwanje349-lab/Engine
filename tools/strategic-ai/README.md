@@ -1,49 +1,58 @@
-# Strategic Reasoning AI (experimental v3)
+# Strategic Reasoning AI (experimental v4)
 
-A separate planning and reinforcement-learning engine inside the Engine repository. It does not replace WiFiFix AI. The goal is to explore alternatives, score their downstream consequences, learn from stronger search targets, and promote checkpoints only when reproducible held-out evaluations pass.
+A research prototype inside the Engine repository, separate from WiFiFix AI. It explores alternatives, compares future outcomes, and promotes a checkpoint only when explicit held-out quality and regression gates pass. It is not a claim of superintelligence or real-world reliability.
 
 ## Planning and learning
 
-- **Bounded Monte Carlo tree search (MCTS):** stochastic transition branches, UCT, discounted returns, rollouts, leaf evaluation, and ranked alternative first actions. Search remains the decision-maker; learned scores are small advisory priors.
-- **Reinforcement learning:** tabular Q-learning provides a compact starting policy for the original stochastic grid world.
-- **Search-distilled neural evaluator:** the grid evaluator is now trained primarily on independent MCTS action-return targets. A small sampled Q-table replay set adds state coverage, but the neural model is not merely trained to copy the whole Q-table.
-- **Cross-domain evaluator:** `strategic_ai/benchmarks.py` defines four controlled families: diminishing-return resource allocation, dependency/deadline scheduling, weighted hazardous route planning, and a two-player take-away game. The first three use single-agent MCTS; the adversarial game uses minimax/negamax targets rather than incorrectly treating the opponent as a cooperative planner.
-- **Comparison and regression gates:** training records search-only, neural-only, hybrid, and random baselines for held-out scenarios. It also runs leave-one-family-out folds in which the evaluator is trained without the test family. A candidate is rejected if search-target validation loss does not improve or if hybrid decision quality regresses beyond the configured margin.
-- **Android/Termux-friendly inference:** exported evaluator weights are JSON; inference uses Python's standard library and needs no NumPy, server, or network access. Training requires NumPy and is intended for free GitHub Actions runners. The included CLI returns decisions for each family.
+- **PUCT planning:** the tree policy balances observed action returns against a normalized learned prior. Search has bounded simulations and horizon, discounted backups, alternative first actions, and an optional learned value estimate at search leaves.
+- **Reusable search:** each planning episode can retain a bounded transposition table; repeated Markov states share nodes. A caller can promote the observed next state to become the next root. Root Dirichlet noise supports exploration while training search-guided targets.
+- **Action-conditioned neural evaluator:** the Q head evaluates an explicit (state, action) pair through domain-aware action features. Allocation uses project-specific actions, scheduling uses job-specific actions, route planning uses directions, and the adversarial game uses explicit take-one-to-five actions. A separate value head predicts state value for PUCT leaf evaluation.
+- **Expert iteration:** search generates action-return targets, the model is trained, then the model guides new PUCT searches that generate more targets. The network is retrained on cumulative data rather than being distilled only once.
+- **Four controlled benchmark families:** diminishing-return resource allocation, dependency/deadline scheduling, weighted hazardous route planning, and an adversarial take-away game. The first three use model-based planning; the adversarial family uses minimax/negamax rather than treating an opponent as a cooperative agent.
+- **Scenario-disjoint validation:** target rows carry scenario identifiers, so all states from one scenario stay in either training or validation. Q and value losses are inverse-scaled to return units at inference. CI reports paired 95% confidence intervals and gates promotion on lower confidence bounds, leave-one-family-out safe-fallback tests, comparisons against random/search baselines, and—when one exists—a same-scenario paired comparison against the last released champion. The report separately measures neural-only versus random on each held-out family to expose zero-shot transfer limits.
+- **Standard-library inference:** NumPy is only needed for training. The JSON checkpoint and four-family CLI use the Python standard library, checked in dedicated jobs on Python 3.12 and 3.13 without installing NumPy.
 
-These are small synthetic benchmarks for controlled testing. They are not real-world task data and do not establish general intelligence.
+Benchmark scores are limited to these synthetic environments. They do not establish broad general reasoning, real-world task performance, or safety.
 
-## Train and test
+## Train and test locally
 
-From the `tools/strategic-ai` directory (Python 3.11+):
+From the tools/strategic-ai directory on Python 3.11 or newer:
 
     python -m pip install -r requirements.txt
     python -m unittest discover -s tests -v
-    python train.py --episodes 500 --eval-episodes 20 --simulations 96 --horizon 18
-    python train_general.py --epochs 30 --fold-epochs 10 --episodes-per-family 6
+    python train.py --episodes 500 --eval-episodes 80 --simulations 96 --horizon 18
+    python train_general.py --epochs 45 --fold-epochs 10 --episodes-per-family 80 --target-scenarios 24 --target-states 12 --expert-iterations 2
 
-The normal GitHub Actions workflow runs unit tests, trains the grid Q-table, distills its neural evaluator from independent MCTS targets, then trains three cross-domain candidates with independent seeds (410, 777, and 2026). Every candidate must pass neural-vs-random comparisons on all four families, seeded held-out scenarios, validation-loss improvement, and four leave-one-family-out folds. The workflow also launches the inference CLI against all four families. It uploads the accepted checkpoints and metrics as a `strategic-ai-v3-<run-number>` artifact for 30 days. A failed training, regression, or CLI smoke-test gate intentionally prevents artifact publication.
+For a faster local check, reduce the training episodes and search simulations; retain at least 40 paired episodes per non-adversarial family for a promotion-quality evaluation.
 
-## Compare inference methods
+## CI and scale
 
-After the general checkpoint exists:
+The strategic-ai workflow pins hosted jobs to ubuntu-24.04, uses current major versions of checkout, setup-python and upload/download-artifact, and cancels stale runs on the same branch. Workflow inputs are passed into scripts through environment variables and validated before training. The three challenger seeds (410, 777 and 2026) train in parallel.
 
-    python -m strategic_ai.general_cli --model artifacts/strategic_general_neural.json --family resource_allocation --mode hybrid
-    python -m strategic_ai.general_cli --model artifacts/strategic_general_neural.json --family scheduling --mode search
-    python -m strategic_ai.general_cli --model artifacts/strategic_general_neural.json --family route_planning --mode neural
-    python -m strategic_ai.general_cli --model artifacts/strategic_general_neural.json --family adversarial --mode search
+Pull requests run a bounded smoke budget. A merge to main and weekly scheduled training use 480 scenarios per planning family and 12 target states per scenario, followed by two guided expert-iteration rounds; when all three challenger seeds pass the gates, the main-branch run publishes the selected checkpoint, metrics, and SHA-256 manifest as a GitHub Release. The raw target-generation budget is up to 60 times a single 24-scenario × 12-state × 3-family round before duplicate-state effects; the adversarial family also contributes exact minimax-labeled positions. If the runtime on hosted runners exceeds the 60-minute job budget, reduce simulation count or scenarios rather than weakening evaluation gates.
 
-Modes are `search`, `neural`, and `hybrid`. The adversarial search-only mode uses exact minimax for this bounded game; the hybrid uses bounded neural-guided negamax. Search budgets and horizon limits are checked to avoid unbounded CPU work.
+Promotion is deliberately strict: a candidate must improve scenario-held-out Q/value loss, avoid train/validation scenario overlap, meet the predeclared paired lower-bound gate versus search on every family, pass leave-one-family-out hybrid safe-fallback non-regression, and avoid a material paired regression versus the released champion. The leave-one-family-out neural-only versus random measurements are reported separately as zero-shot transfer diagnostics; passing the fallback gate does not prove that the neural network itself generalizes to a domain it never saw. The release job only selects checkpoints whose metrics explicitly mark them accepted.
 
 ## Android / Termux
 
-Install Python in Termux, download the latest successful workflow artifact from GitHub Actions, and extract its JSON files into `tools/strategic-ai/artifacts/`. Then, from `tools/strategic-ai`, run a command from the section above. For a small phone, start with fewer simulations (for example, 64) and a horizon of 10–12. The neural-only mode is cheaper; hybrid mode spends CPU on search. Training stays on GitHub Actions, and no paid API is required.
+Install Python in Termux, then retrieve the latest released checkpoint and its SHA-256 manifest:
 
-## Reading the metrics honestly
+    mkdir -p ~/strategic-ai && cd ~/strategic-ai
+    curl -fL -o strategic_general_neural.json https://github.com/bmwanje349-lab/Engine/releases/latest/download/strategic_general_neural.json
+    curl -fL -o SHA256SUMS https://github.com/bmwanje349-lab/Engine/releases/latest/download/SHA256SUMS
+    sha256sum -c SHA256SUMS
 
-- `artifacts/metrics.json` measures the original grid-world policy.
-- `artifacts/general_metrics.json` and the two `general_metrics_seed*.json` files report the three independent training runs. They include random, search-only, neural-only, and hybrid results per family, target-state counts, validation loss, and four leave-one-family-out folds.
-- Success rate and mean return describe only these seeded synthetic problems. The adversarial benchmark additionally reports exact minimax regret on held-out pile sizes.
-- A checkpoint is kept only if the MCTS-target validation loss improves, neural-only return is at least as good as random on every family, hybrid search avoids regressions on held-out families, and all three independently seeded candidates pass. A family not represented in the checkpoint's training domains is marked unsupported; hybrid mode falls back to search instead of trusting an out-of-domain neural prior. Model size alone is never treated as evidence of intelligence.
+Run from the directory containing the downloaded model:
 
-Search quality still depends on the transition model, reward design, state features, rollout budget, and evaluation coverage. The engine explores multiple candidate futures, but it is an experimental planner—not a superintelligence, a pretrained general-reasoning model, or a substitute for verifying high-stakes decisions.
+    python -m strategic_ai.general_cli --model strategic_general_neural.json --family route_planning --mode hybrid --simulations 64 --horizon 10
+
+For those commands, clone or download the tools/strategic-ai source and run the CLI from that directory. Alternatively, set PYTHONPATH to the source directory. No NumPy, server, paid API or network access is needed at inference time after the source and checkpoint are present.
+
+Each accepted release contains the selected champion, individual seed candidates and metrics, the grid-world artifacts, the selection summary, and SHA256SUMS. The manifest hashes every JSON asset in that release (the manifest does not hash itself). Checkpoints can be replaced by a later release; record the chosen release tag if reproducibility matters.
+
+## Reading the evidence honestly
+
+- The artifacts/general_metrics.json file records the selected checkpoint's training and held-out metrics. general_metrics_seed*.json stores each independently trained candidate and its explicit promotion decision.
+- champion_selection.json records which accepted seed was selected and the paired confidence-bound score used to choose it.
+- metrics.json measures the separate original grid-world policy; it is not the same evaluator as the cross-domain checkpoint.
+- A checkpoint is accepted only against these predeclared synthetic tests. Search quality still depends on the transition model, feature representation, reward design, search budget and benchmark coverage. The system explores multiple possible futures but is experimental decision-support code, not a general intelligence or a substitute for independently checking consequential decisions.

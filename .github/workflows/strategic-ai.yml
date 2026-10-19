@@ -1,4 +1,5 @@
-name: Strategic Reasoning AI - train and benchmark
+name: Strategic Reasoning AI - train, benchmark and release
+
 on:
   push:
     paths:
@@ -11,150 +12,421 @@ on:
   workflow_dispatch:
     inputs:
       episodes:
-        description: Number of Q-learning episodes (50-100000)
+        description: Grid-world training episodes (50-100000)
         required: false
         default: '500'
+        type: string
       simulations:
-        description: MCTS simulations per decision (8-5000)
+        description: Grid search simulations per decision (8-5000)
         required: false
         default: '96'
+        type: string
+      target_scenarios:
+        description: Independent scenarios per planning family (24-1000; weekly default 480)
+        required: false
+        default: '480'
+        type: string
+      eval_episodes:
+        description: Paired held-out episodes per non-adversarial family (40-1000)
+        required: false
+        default: '80'
+        type: string
   schedule:
     - cron: '21 3 * * 1'
+
+concurrency:
+  group: strategic-ai-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
+
 jobs:
-  train-test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    env:
-      PYTHONHASHSEED: '0'
+  configure:
+    runs-on: ubuntu-24.04
+    outputs:
+      episodes: ${{ steps.settings.outputs.episodes }}
+      simulations: ${{ steps.settings.outputs.simulations }}
+      target_scenarios: ${{ steps.settings.outputs.target_scenarios }}
+      eval_episodes: ${{ steps.settings.outputs.eval_episodes }}
+    steps:
+      - name: Validate and expose bounded inputs
+        id: settings
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref }}
+          DISPATCH_EPISODES: ${{ github.event.inputs.episodes || '500' }}
+          DISPATCH_SIMULATIONS: ${{ github.event.inputs.simulations || '96' }}
+          DISPATCH_TARGET_SCENARIOS: ${{ github.event.inputs.target_scenarios || '480' }}
+          DISPATCH_EVAL_EPISODES: ${{ github.event.inputs.eval_episodes || '80' }}
+        run: |
+          ep="$DISPATCH_EPISODES"
+          sim="$DISPATCH_SIMULATIONS"
+          scenarios="$DISPATCH_TARGET_SCENARIOS"
+          eval_ep="$DISPATCH_EVAL_EPISODES"
+
+          case "$EVENT_NAME" in
+            push)
+              if [[ "$REF_NAME" == "refs/heads/main" ]]; then
+                # A merged Strategic AI change produces a full-budget, gated release run.
+                ep=350
+                sim=64
+                scenarios=480
+                eval_ep=80
+              else
+                ep=250
+                sim=48
+                scenarios=24
+                eval_ep=60
+              fi
+              ;;
+            pull_request)
+              ep=250
+              sim=48
+              scenarios=24
+              eval_ep=60
+              ;;
+            schedule)
+              ep=350
+              sim=64
+              scenarios=480
+              eval_ep=80
+              ;;
+          esac
+
+          [[ "$ep" =~ ^[0-9]+$ ]] && (( ep >= 50 && ep <= 100000 )) || { echo 'invalid episodes'; exit 2; }
+          [[ "$sim" =~ ^[0-9]+$ ]] && (( sim >= 8 && sim <= 5000 )) || { echo 'invalid simulations'; exit 2; }
+          [[ "$scenarios" =~ ^[0-9]+$ ]] && (( scenarios >= 24 && scenarios <= 1000 )) || { echo 'invalid target_scenarios'; exit 2; }
+          [[ "$eval_ep" =~ ^[0-9]+$ ]] && (( eval_ep >= 40 && eval_ep <= 1000 )) || { echo 'invalid eval_episodes'; exit 2; }
+
+          echo "episodes=$ep" >> "$GITHUB_OUTPUT"
+          echo "simulations=$sim" >> "$GITHUB_OUTPUT"
+          echo "target_scenarios=$scenarios" >> "$GITHUB_OUTPUT"
+          echo "eval_episodes=$eval_ep" >> "$GITHUB_OUTPUT"
+
+  unit-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: tools/strategic-ai
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: tools/strategic-ai/requirements.txt
+      - name: Install training-only dependency
+        run: python -m pip install -r requirements.txt
+      - name: Test search, neural inference, value head and benchmark families
+        run: python -m unittest discover -s tests -v
+
+  termux-cli:
+    name: NumPy-free inference CLI (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.13']
+    defaults:
+      run:
+        working-directory: tools/strategic-ai
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Prove NumPy is absent and run the real CLI
+        shell: bash
+        run: |
+          python - <<'PY'
+          import importlib.util
+          import json
+          from pathlib import Path
+          import sys
+
+          assert sys.version_info[:2] in ((3, 12), (3, 13))
+          assert importlib.util.find_spec("numpy") is None, "NumPy was installed unexpectedly"
+          payload = {
+              "format": "strategic-ai-general-neural-v4-puct",
+              "inputs": 32, "action_features": 8, "hidden": [96, 64],
+              "W1": [[0.0] * 96 for _ in range(40)], "b1": [0.0] * 96,
+              "W2": [[0.0] * 64 for _ in range(96)], "b2": [0.0] * 64,
+              "Wq": [0.0] * 64, "bq": [0.0],
+              "Wv": [0.0] * 64, "bv": [0.0],
+              "trained_domains": [0, 1, 2, 3],
+              "target_scaling": {
+                  "q_mean": 0.0, "q_scale": 1.0,
+                  "value_mean": 0.0, "value_scale": 1.0,
+              },
+              "target_semantics": {
+                  "policy": "action-conditioned Q(s,a) in normalized-return units",
+                  "value": "state value V(s) for PUCT leaf evaluation",
+              },
+              "inference": "pure-python-standard-library",
+          }
+          Path("/tmp/termux-smoke-model.json").write_text(json.dumps(payload))
+          print(f"Python {sys.version.split()[0]}: NumPy absent; checkpoint created.")
+          PY
+          for family in resource_allocation scheduling route_planning adversarial; do
+            python -m strategic_ai.general_cli \
+              --model /tmp/termux-smoke-model.json \
+              --family "$family" --mode hybrid --simulations 8 --horizon 4 \
+              > "/tmp/$family.json"
+          done
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for family in ("resource_allocation", "scheduling", "route_planning", "adversarial"):
+              result = json.loads(Path(f"/tmp/{family}.json").read_text())
+              assert result["family"] == family
+              assert result["decision"].get("best_action") is not None, family
+          print("All four inference families passed without installing or importing NumPy.")
+          PY
+
+  grid-train:
+    needs: [configure, unit-tests]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: tools/strategic-ai
+    env:
+      PYTHONHASHSEED: '0'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
           cache: pip
           cache-dependency-path: tools/strategic-ai/requirements.txt
       - name: Install training dependency
         run: python -m pip install -r requirements.txt
-      - name: Test tree search, learning and benchmark families
-        run: python -m unittest discover -s tests -v
-      - name: Set bounded training budget
-        id: cfg
-        shell: bash
+      - name: Train and validate original grid-world policy
+        env:
+          GRID_EPISODES: ${{ needs.configure.outputs.episodes }}
+          GRID_SIMULATIONS: ${{ needs.configure.outputs.simulations }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          ep='${{ github.event.inputs.episodes || '500' }}'
-          sim='${{ github.event.inputs.simulations || '96' }}'
-          if [[ '${{ github.event_name }}' == 'schedule' ]]; then ep=350; sim=64; fi
-          [[ "$ep" =~ ^[0-9]+$ ]] && (( ep >= 50 && ep <= 100000 )) || { echo 'invalid episodes'; exit 2; }
-          [[ "$sim" =~ ^[0-9]+$ ]] && (( sim >= 8 && sim <= 5000 )) || { echo 'invalid simulations'; exit 2; }
-          echo "episodes=$ep" >> "$GITHUB_OUTPUT"
-          echo "simulations=$sim" >> "$GITHUB_OUTPUT"
-      - name: Train grid policy and distill MCTS search targets
-        run: |
-          python train.py --episodes '${{ steps.cfg.outputs.episodes }}' --eval-episodes 20 --simulations '${{ steps.cfg.outputs.simulations }}' --horizon 18 --seed 410 --out artifacts/strategic_policy.json --metrics artifacts/metrics.json
+          eval_episodes=60
+          if [[ "$EVENT_NAME" == "schedule" || "$EVENT_NAME" == "workflow_dispatch" ]]; then eval_episodes=80; fi
+          python train.py --episodes "$GRID_EPISODES" --eval-episodes "$eval_episodes" \
+            --simulations "$GRID_SIMULATIONS" --horizon 18 --seed 410 \
+            --out artifacts/strategic_policy.json --metrics artifacts/metrics.json
           python - <<'PY'
           import json, math
           from pathlib import Path
-          m=json.loads(Path('artifacts/metrics.json').read_text())
-          assert m['training']['updates'] > 0
+          metrics = json.loads(Path('artifacts/metrics.json').read_text())
+          assert metrics['training']['updates'] > 0
           assert Path('artifacts/strategic_policy.json').stat().st_size > 100
           assert Path('artifacts/strategic_neural.json').stat().st_size > 100
-          assert m['neural_distillation']['parameters'] > 1000
-          assert m['neural_distillation']['search_target_states'] >= 20
-          assert math.isfinite(m['neural_distillation']['final_validation_mse'])
-          for section in ('held_out_random_policy','held_out_learned_policy','held_out_neural_policy','held_out_mcts_policy'):
-              s=m[section]
-              assert 0 <= s['success_rate'] <= 1
-              assert math.isfinite(s['mean_return'])
-          print('Grid checkpoints and MCTS-generated neural targets passed integrity checks.')
+          assert metrics['neural_distillation']['parameters'] > 1000
+          assert metrics['neural_distillation']['search_target_states'] >= 20
+          assert math.isfinite(metrics['neural_distillation']['final_validation_mse'])
+          for section in ('held_out_random_policy', 'held_out_learned_policy',
+                          'held_out_neural_policy', 'held_out_mcts_policy'):
+              scores = metrics[section]
+              assert 0 <= scores['success_rate'] <= 1
+              assert math.isfinite(scores['mean_return'])
+          print('Grid checkpoints and MCTS-generated targets passed integrity checks.')
           PY
-      - name: Train independently seeded cross-domain candidates
-        run: |
-          for seed in 410 777 2026; do
-            if [[ "$seed" == "410" ]]; then
-              model=artifacts/strategic_general_neural.json
-              metrics=artifacts/general_metrics.json
-            else
-              model="artifacts/strategic_general_neural_seed${seed}.json"
-              metrics="artifacts/general_metrics_seed${seed}.json"
-            fi
-            echo "Training and evaluating seed $seed"
-            python train_general.py --seed "$seed" --epochs 45 --fold-epochs 20 --episodes-per-family 20 --target-simulations 32 --eval-simulations 48 --target-horizon 10 --eval-horizon 12 --fold-eval-episodes 8 --target-scenarios 24 --target-states 12 --train-nim-max 60 --out "$model" --metrics "$metrics"
-          done
-          python - <<'PY'
-          import json, math
-          from pathlib import Path
-          seeds=(410,777,2026)
-          families=('resource_allocation','scheduling','route_planning','adversarial')
-          summaries={}
-          for seed in seeds:
-              model=Path('artifacts/strategic_general_neural.json' if seed==410 else f'artifacts/strategic_general_neural_seed{seed}.json')
-              metrics=Path('artifacts/general_metrics.json' if seed==410 else f'artifacts/general_metrics_seed{seed}.json')
-              assert model.stat().st_size > 1000, f'seed {seed}: checkpoint too small'
-              m=json.loads(metrics.read_text())
-              assert m['training']['target_generation']['unique_target_states'] >= 100, f'seed {seed}: insufficient training coverage'
-              assert m['training']['neural_distillation']['validation_mse_improved'], f'seed {seed}: target loss did not improve'
-              assert len(m['leave_one_family_out']) == 4
-              assert m['acceptance']['all_metrics_finite']
-              assert m['acceptance']['neural_only_beats_or_matches_baseline_on_every_family'], f'seed {seed}: neural-only baseline regression'
-              assert m['acceptance']['promote_candidate'], f'seed {seed}: held-out regression gate rejected candidate'
-              for family in families:
-                  for method in ('search_only','neural_only','hybrid'):
-                      score=m['held_out_scenarios'][family][method]
-                      assert 0 <= score['success_rate'] <= 1
-                      assert math.isfinite(score['mean_return'])
-              summaries[seed]={
-                  'checkpoint_bytes':model.stat().st_size,
-                  'train_states':m['training']['neural_distillation']['train_states'],
-                  'target_states':m['training']['target_generation']['unique_target_states'],
-                  'target_mse':m['training']['neural_distillation']['final_validation_mse'],
-                  'neural_vs_baseline':m['acceptance']['neural_only_vs_baseline_return_deltas'],
-                  'leave_one_family_out_min_delta':m['acceptance']['leave_one_family_out_hybrid_min_delta'],
-                  'held_out':{
-                      family:{
-                          method:{
-                              'return':m['held_out_scenarios'][family][method]['mean_return'],
-                              'success_rate':m['held_out_scenarios'][family][method]['success_rate'],
-                          }
-                          for method in ('search_only','neural_only','hybrid')
-                      } for family in families
-                  },
-              }
-          Path('/tmp/strategic_multi_seed_summary.json').write_text(json.dumps(summaries,indent=2))
-          print(json.dumps(summaries,indent=2))
-          print('All three independent training seeds passed the held-out promotion gates.')
-          PY
-      - name: Smoke-test Android/Termux inference CLI
-        run: |
-          python -m strategic_ai.general_cli --model artifacts/strategic_general_neural.json --family resource_allocation --mode hybrid --simulations 16 --horizon 8 > /tmp/resource.json
-          python -m strategic_ai.general_cli --model artifacts/strategic_general_neural.json --family scheduling --mode neural --simulations 16 --horizon 8 > /tmp/scheduling.json
-          python -m strategic_ai.general_cli --model artifacts/strategic_general_neural.json --family route_planning --mode hybrid --simulations 16 --horizon 8 > /tmp/route.json
-          python -m strategic_ai.general_cli --model artifacts/strategic_general_neural.json --family adversarial --mode hybrid --simulations 16 --horizon 8 > /tmp/adversarial.json
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          for family in ('resource','scheduling','route','adversarial'):
-              result=json.loads(Path(f'/tmp/{family}.json').read_text())
-              assert result['decision'].get('best_action') is not None, family
-              assert result['family'] in ('resource_allocation','scheduling','route_planning','adversarial')
-          print('All four JSON inference CLI smoke tests passed.')
-          PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: strategic-ai-v3-${{ github.run_number }}
+          name: strategic-ai-grid
           path: |
             tools/strategic-ai/artifacts/strategic_policy.json
             tools/strategic-ai/artifacts/strategic_neural.json
-            tools/strategic-ai/artifacts/strategic_general_neural.json
-            tools/strategic-ai/artifacts/strategic_general_neural_seed777.json
-            tools/strategic-ai/artifacts/strategic_general_neural_seed2026.json
             tools/strategic-ai/artifacts/metrics.json
-            tools/strategic-ai/artifacts/general_metrics.json
-            tools/strategic-ai/artifacts/general_metrics_seed777.json
-            tools/strategic-ai/artifacts/general_metrics_seed2026.json
           if-no-files-found: error
           retention-days: 30
+
+  train-candidate:
+    name: Train challenger seed ${{ matrix.seed }}
+    needs: [configure, unit-tests]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [410, 777, 2026]
+    defaults:
+      run:
+        working-directory: tools/strategic-ai
+    env:
+      PYTHONHASHSEED: '0'
+      SEED: ${{ matrix.seed }}
+      TARGET_SCENARIOS: ${{ needs.configure.outputs.target_scenarios }}
+      EVAL_EPISODES: ${{ needs.configure.outputs.eval_episodes }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: tools/strategic-ai/requirements.txt
+      - name: Install training dependency
+        run: python -m pip install -r requirements.txt
+      - name: Retrieve last accepted champion for paired comparison
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          mkdir -p /tmp/strategic-champion
+          if gh release download --pattern strategic_general_neural.json --dir /tmp/strategic-champion; then
+            if [[ -s /tmp/strategic-champion/strategic_general_neural.json ]]; then
+              echo 'Found the last published champion checkpoint.'
+            else
+              echo 'No champion asset in latest release; using first-champion path.'
+            fi
+          else
+            echo 'No previous champion release found; initial promotion uses independent baseline gates.'
+          fi
+      - name: Train, evaluate and gate this seed
+        shell: bash
+        run: |
+          model="artifacts/strategic_general_neural_seed$SEED.json"
+          metrics="artifacts/general_metrics_seed$SEED.json"
+          champion_arg=()
+          if [[ -s /tmp/strategic-champion/strategic_general_neural.json ]]; then
+            champion_arg=(--champion /tmp/strategic-champion/strategic_general_neural.json)
+          fi
+          python train_general.py \
+            --seed "$SEED" --epochs 45 --fold-epochs 10 \
+            --episodes-per-family "$EVAL_EPISODES" \
+            --target-simulations 32 --eval-simulations 64 \
+            --target-horizon 10 --eval-horizon 12 \
+            --fold-eval-episodes 40 \
+            --target-scenarios "$TARGET_SCENARIOS" --target-states 12 \
+            --train-nim-max 60 --expert-iterations 2 \
+            --out "$model" --metrics "$metrics" "${champion_arg[@]}"
+          python - "$metrics" "$model" <<'PY'
+          import json, math, sys
+          from pathlib import Path
+          metrics_path, model_path = map(Path, sys.argv[1:])
+          assert model_path.stat().st_size > 1000, 'checkpoint too small'
+          metrics = json.loads(metrics_path.read_text())
+          training = metrics['training']
+          net = training['neural_distillation']
+          assert training['initial_target_generation']['unique_target_states'] >= 100
+          assert not net['scenario_group_overlap'], 'scenario train/validation leakage'
+          assert net['validation_scenarios'] > 0 and net['train_scenarios'] > 0
+          assert net['validation_mse_improved'], 'scenario-held-out target loss did not improve'
+          assert len(metrics['leave_one_family_out']) == 4
+          assert all('neural_only_minus_random_ci95_lower' in row for row in metrics['leave_one_family_out'])
+          acceptance = metrics['acceptance']
+          assert acceptance['scenario_disjoint_validation']
+          assert acceptance['all_metrics_finite']
+          assert acceptance['neural_only_beats_or_matches_random_on_every_family']
+          assert acceptance['hybrid_lower_confidence_bound_beats_search_margin']
+          assert acceptance['leave_one_family_out_safe_fallback_pass']
+          assert acceptance['promote_candidate'], 'challenger failed promotion gates'
+          for family in ('resource_allocation', 'scheduling', 'route_planning', 'adversarial'):
+              for method in ('search_only', 'neural_only', 'hybrid', 'random'):
+                  scores = metrics['held_out_scenarios'][family][method]
+                  assert scores['episodes'] >= 40
+                  assert 0 <= scores['success_rate'] <= 1
+                  assert math.isfinite(scores['mean_return'])
+              paired = metrics['held_out_scenarios'][family]['paired_comparisons']['hybrid_minus_search']
+              assert paired['ci95_lower'] >= -0.5, family
+          print(f"{model_path.name}: scenario split, confidence-bound and champion gates passed.")
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: strategic-ai-seed-${{ matrix.seed }}
+          path: |
+            tools/strategic-ai/artifacts/strategic_general_neural_seed${{ matrix.seed }}.json
+            tools/strategic-ai/artifacts/general_metrics_seed${{ matrix.seed }}.json
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-release:
+    needs: [unit-tests, termux-cli, grid-train, train-candidate]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Download grid-world outputs
+        uses: actions/download-artifact@v7
+        with:
+          name: strategic-ai-grid
+          path: tools/strategic-ai/artifacts
+      - name: Download all independently gated challengers
+        uses: actions/download-artifact@v7
+        with:
+          pattern: strategic-ai-seed-*
+          path: tools/strategic-ai/artifacts
+          merge-multiple: true
+      - name: Select best accepted checkpoint and generate SHA-256 manifest
+        working-directory: tools/strategic-ai
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import shutil
+          from pathlib import Path
+
+          artifacts = Path("artifacts")
+          candidates = []
+          for seed in (410, 777, 2026):
+              model = artifacts / f"strategic_general_neural_seed{seed}.json"
+              metrics_path = artifacts / f"general_metrics_seed{seed}.json"
+              if not model.is_file() or not metrics_path.is_file():
+                  raise SystemExit(f"seed {seed}: missing uploaded model or metrics")
+              metrics = json.loads(metrics_path.read_text())
+              acceptance = metrics.get("acceptance", {})
+              if not acceptance.get("promote_candidate"):
+                  raise SystemExit(f"seed {seed}: refusing to release an unaccepted checkpoint")
+              deltas = acceptance["held_out_hybrid_vs_search_paired_deltas"]
+              score = min(float(value["ci95_lower"]) for value in deltas.values())
+              candidates.append((score, seed, model, metrics_path, metrics))
+          candidates.sort(key=lambda row: (row[0], -row[1]), reverse=True)
+          score, seed, model, metrics_path, metrics = candidates[0]
+
+          shutil.copy2(model, artifacts / "strategic_general_neural.json")
+          shutil.copy2(metrics_path, artifacts / "general_metrics.json")
+          selection = {
+              "selected_seed": seed,
+              "selection_metric": "maximum minimum paired 95% CI lower bound for hybrid minus search",
+              "selected_minimum_ci95_lower": score,
+              "all_seed_models_independently_passed": True,
+              "candidate_scores": [
+                  {"seed": item[1], "minimum_ci95_lower": item[0]}
+                  for item in sorted(candidates, key=lambda row: row[1])
+              ],
+              "checkpoint_sha256": hashlib.sha256(
+                  (artifacts / "strategic_general_neural.json").read_bytes()
+              ).hexdigest(),
+          }
+          (artifacts / "champion_selection.json").write_text(json.dumps(selection, indent=2) + "\n")
+
+          json_assets = sorted(path.name for path in artifacts.glob("*.json"))
+          lines = []
+          for name in json_assets:
+              digest = hashlib.sha256((artifacts / name).read_bytes()).hexdigest()
+              lines.append(f"{digest}  {name}")
+          (artifacts / "SHA256SUMS").write_text("\n".join(lines) + "\n")
+          print(json.dumps(selection, indent=2))
+          print("SHA-256 manifest written for " + str(len(json_assets)) + " JSON assets.")
+          PY
+      - name: Publish accepted models and metrics as the latest GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_NUMBER: ${{ github.run_number }}
+        working-directory: tools/strategic-ai
+        shell: bash
+        run: |
+          tag="strategic-ai-v4-$RUN_NUMBER"
+          mapfile -t assets < <(find artifacts -maxdepth 1 -type f \( -name '*.json' -o -name 'SHA256SUMS' \) -print | sort)
+          gh release create "$tag" "${assets[@]}" \
+            --title "Strategic AI v4 — run $RUN_NUMBER" \
+            --latest \
+            --notes "Accepted cross-domain action-value checkpoint with PUCT and expert iteration. Models are tested on controlled synthetic benchmarks; scores are not evidence of general intelligence or real-world guarantees. Download: curl -fL -o strategic_general_neural.json https://github.com/bmwanje349-lab/Engine/releases/latest/download/strategic_general_neural.json. Verify assets: curl -fL -o SHA256SUMS https://github.com/bmwanje349-lab/Engine/releases/latest/download/SHA256SUMS && sha256sum -c SHA256SUMS."

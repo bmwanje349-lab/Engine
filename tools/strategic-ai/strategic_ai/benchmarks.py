@@ -9,6 +9,7 @@ from functools import lru_cache
 import random
 from typing import Any
 
+from .action_encoding import NIM_ACTIONS, RESOURCE_ACTIONS, SCHEDULING_ACTIONS
 from .gridworld import ACTIONS, DELTAS
 
 
@@ -47,10 +48,10 @@ class ResourceAllocationProblem:
             return ()
         allocated, decisions = state
         remaining = self.budget - sum(allocated)
-        choices = [ACTIONS[i] for i in range(4)
+        choices = [RESOURCE_ACTIONS[i] for i in range(4)
                    if allocated[i] < self.demands[i] and remaining > 0]
         if decisions < self.max_decisions - 1:
-            choices.append("REST")
+            choices.append(RESOURCE_ACTIONS[4])
         return tuple(choices)
 
     def step(self, state, action, rng):
@@ -60,10 +61,10 @@ class ResourceAllocationProblem:
         allocated, decisions = state
         allocated = list(allocated)
         reward = -0.12
-        if action == "REST":
+        if action == RESOURCE_ACTIONS[4]:
             reward -= 0.35
         else:
-            i = ACTIONS.index(action)
+            i = RESOURCE_ACTIONS.index(action)
             reward += self.values[i] * (1.0 - 0.18 * allocated[i]) - 0.10
             allocated[i] += 1
             if allocated[i] == self.demands[i]:
@@ -138,9 +139,9 @@ class SchedulingProblem:
         if self.terminal(state):
             return ()
         mask, clock, wait_used, _decisions, _late_mask = state
-        choices = [ACTIONS[i] for i in self._ready(mask)]
+        choices = [SCHEDULING_ACTIONS[i] for i in self._ready(mask)]
         if not wait_used and clock < self.max_time - 1:
-            choices.append("REST")
+            choices.append(SCHEDULING_ACTIONS[4])
         return tuple(choices)
 
     def step(self, state, action, rng):
@@ -152,12 +153,12 @@ class SchedulingProblem:
         completed = mask
         new_clock = clock
         new_wait_used = wait_used
-        if action == "REST":
+        if action == SCHEDULING_ACTIONS[4]:
             new_clock += 1
             new_wait_used = True
             reward -= 0.65
         else:
-            i = ACTIONS.index(action)
+            i = SCHEDULING_ACTIONS.index(action)
             duration = self.durations[i]
             new_clock += duration
             lateness = max(0, new_clock - self.deadlines[i])
@@ -172,7 +173,7 @@ class SchedulingProblem:
         nxt = (completed, new_clock, new_wait_used, decisions + 1, late_mask)
         done = self.terminal(nxt)
         success = bool(done and completed == 0b1111 and new_clock <= self.max_time and late_mask == 0)
-        return nxt, reward, done, {"success": success, "job_completed": action if action != "REST" else None}
+        return nxt, reward, done, {"success": success, "job_completed": action if action != SCHEDULING_ACTIONS[4] else None}
 
     def evaluate(self, state):
         mask, clock, _wait_used, _decisions, _late_mask = state
@@ -333,13 +334,13 @@ class NimProblem:
         return int(state) <= 0
 
     def actions(self, state):
-        return tuple(ACTIONS[i] for i in range(min(5, int(state))))
+        return tuple(NIM_ACTIONS[i] for i in range(min(5, int(state))))
 
     def step(self, state, action, rng):
         del rng
         if action not in self.actions(state):
             return state, -1.0, self.terminal(state), {"invalid_action": True}
-        take = ACTIONS.index(action) + 1
+        take = NIM_ACTIONS.index(action) + 1
         nxt = int(state) - take
         return nxt, (1.0 if nxt == 0 else 0.0), nxt <= 0, {"stones_taken": take}
 
@@ -372,48 +373,28 @@ def nim_value(stones: int) -> float:
 def nim_action_values(stones: int) -> dict[str, float]:
     """Strong-search action targets (optimal returns from the current player's view)."""
     problem = NimProblem(stones)
-    return {action: -nim_value(stones - (ACTIONS.index(action) + 1))
+    return {action: -nim_value(stones - (NIM_ACTIONS.index(action) + 1))
             for action in problem.actions(stones)}
 
 
-def _bounded_neural_value(stones: int, neural) -> float:
-    if stones <= 0:
-        return -1.0
-    features = NimProblem(stones).features(stones)
-    outputs = neural.predict_features(features)
-    legal = NimProblem(stones).actions(stones)
-    if not legal:
-        return -1.0
-    return max(-1.0, min(1.0, max(float(outputs[ACTIONS.index(a)]) for a in legal)))
-
-
 def nim_hybrid_action_values(stones: int, neural, *, depth: int = 5) -> tuple[dict[str, float], int]:
-    """Bounded adversarial look-ahead with a small neural leaf-value contribution."""
+    """Use exact minimax when the adversarial game is fully solvable.
+
+    The current adversarial benchmark is finite take-away Nim. Since the full
+    game tree has an exact cached solver, an approximate neural leaf must never
+    degrade the best move. The neural policy is still trained/evaluated
+    independently, but the hybrid executor defers to a proof-quality answer
+    when one is available. For genuinely large adversarial games, replace this
+    branch with alpha-beta/PUCT plus an explicitly bounded leaf evaluator.
+    """
     if depth < 1:
         raise ValueError("depth must be positive")
-    # Never let an evaluator trained only on other domains steer an adversarial
-    # search. Fall back to exact minimax until this checkpoint has game data.
-    if hasattr(neural, "supports_features") and not neural.supports_features(NimProblem(stones).features(stones)):
-        return nim_action_values(stones), 0
-    nodes = 0
-
-    def negamax(n: int, remaining: int) -> float:
-        nonlocal nodes
-        nodes += 1
-        if n <= 0:
-            return -1.0
-        if remaining <= 0:
-            # Conservative blending: an unfamiliar neural evaluator cannot
-            # overwhelm the simple bounded fallback on a novel game state.
-            learned = _bounded_neural_value(n, neural)
-            fallback = 0.25 if n % 6 else -0.25
-            return max(-0.95, min(0.95, 0.20 * learned + 0.80 * fallback))
-        return max(-negamax(n - take, remaining - 1)
-                   for take in range(1, min(5, n) + 1))
-
-    values = {action: -negamax(stones - (ACTIONS.index(action) + 1), depth - 1)
-              for action in NimProblem(stones).actions(stones)}
-    return values, nodes
+    if not 1 <= int(stones) <= 100:
+        raise ValueError("Nim benchmark pile must be between 1 and 100")
+    # Solved positions are stronger evidence than a learned estimate. Count
+    # unique subproblem states represented by the memoized exact recurrence.
+    values = nim_action_values(int(stones))
+    return values, int(stones) + 1
 
 
 def make_problem(family: str, seed: int):
