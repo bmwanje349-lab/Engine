@@ -173,7 +173,7 @@ class SchedulingProblem:
         nxt = (completed, new_clock, new_wait_used, decisions + 1, late_mask)
         done = self.terminal(nxt)
         success = bool(done and completed == 0b1111 and new_clock <= self.max_time and late_mask == 0)
-        return nxt, reward, done, {"success": success, "job_completed": action if action != "REST" else None}
+        return nxt, reward, done, {"success": success, "job_completed": action if action != SCHEDULING_ACTIONS[4] else None}
 
     def evaluate(self, state):
         mask, clock, _wait_used, _decisions, _late_mask = state
