@@ -1,0 +1,83 @@
+name: Strategic Reasoning AI - train and benchmark
+on:
+  push:
+    paths:
+      - 'tools/strategic-ai/**'
+      - '.github/workflows/strategic-ai.yml'
+  pull_request:
+    paths:
+      - 'tools/strategic-ai/**'
+      - '.github/workflows/strategic-ai.yml'
+  workflow_dispatch:
+    inputs:
+      episodes:
+        description: Number of Q-learning episodes (50-100000)
+        required: false
+        default: '500'
+      simulations:
+        description: MCTS simulations per decision (8-5000)
+        required: false
+        default: '96'
+  schedule:
+    - cron: '21 3 * * 1'
+permissions:
+  contents: read
+jobs:
+  train-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONHASHSEED: '0'
+    defaults:
+      run:
+        working-directory: tools/strategic-ai
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: tools/strategic-ai/requirements.txt
+      - name: Install training dependency
+        run: python -m pip install -r requirements.txt
+      - name: Test tree search and learning
+        run: python -m unittest discover -s tests -v
+      - name: Set bounded training budget
+        id: cfg
+        shell: bash
+        run: |
+          ep='${{ github.event.inputs.episodes || '500' }}'
+          sim='${{ github.event.inputs.simulations || '96' }}'
+          if [[ '${{ github.event_name }}' == 'schedule' ]]; then ep=350; sim=64; fi
+          [[ "$ep" =~ ^[0-9]+$ ]] && (( ep >= 50 && ep <= 100000 )) || { echo 'invalid episodes'; exit 2; }
+          [[ "$sim" =~ ^[0-9]+$ ]] && (( sim >= 8 && sim <= 5000 )) || { echo 'invalid simulations'; exit 2; }
+          echo "episodes=$ep" >> "$GITHUB_OUTPUT"
+          echo "simulations=$sim" >> "$GITHUB_OUTPUT"
+      - name: Train policy and evaluate on held-out scenarios
+        run: |
+          python train.py --episodes '${{ steps.cfg.outputs.episodes }}' --eval-episodes 20 --simulations '${{ steps.cfg.outputs.simulations }}' --horizon 18 --seed 410 --out artifacts/strategic_policy.json --metrics artifacts/metrics.json
+          python - <<'PY'
+          import json, math
+          from pathlib import Path
+          m=json.loads(Path('artifacts/metrics.json').read_text())
+          assert m['training']['updates'] > 0
+          assert Path('artifacts/strategic_policy.json').stat().st_size > 100
+          assert Path('artifacts/strategic_neural.json').stat().st_size > 100
+          assert m['neural_distillation']['parameters'] > 1000
+          assert math.isfinite(m['neural_distillation']['final_validation_mse'])
+          for section in ('held_out_random_policy','held_out_learned_policy','held_out_neural_policy','held_out_mcts_policy'):
+              s=m[section]
+              assert 0 <= s['success_rate'] <= 1
+              assert math.isfinite(s['mean_return'])
+          print('Checkpoint integrity and held-out benchmark metrics passed.')
+          print('Benchmark scope:', m['validation_scope'])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: strategic-ai-v1-${{ github.run_number }}
+          path: |
+            tools/strategic-ai/artifacts/strategic_policy.json
+            tools/strategic-ai/artifacts/strategic_neural.json
+            tools/strategic-ai/artifacts/metrics.json
+          if-no-files-found: error
+          retention-days: 30

@@ -2,6 +2,8 @@
 
 WiFiFix AI source, tests, and GitHub Actions training pipeline live under tools/wififix-ai/.
 
-This is a from-scratch neural diagnostic prototype for Wi-Fi troubleshooting. The original adaptive Termux recovery script remains a separate, authoritative safety layer; the neural adviser does not directly toggle Wi-Fi.
+A separate Strategic Reasoning AI prototype now lives under tools/strategic-ai/. It combines bounded Monte Carlo tree search, reinforcement learning, and a compact neural Q-value evaluator; its CI workflow trains and publishes Android-deployable JSON checkpoints.
 
-Read tools/wififix-ai/README.md and tools/wififix-ai/STATUS.md for setup, validation scope, and limitations.
+WiFiFix remains a separate neural diagnostic prototype for Wi-Fi troubleshooting. The adaptive Termux recovery script remains its authoritative safety layer; the neural adviser does not directly toggle Wi-Fi.
+
+Read tools/wififix-ai/README.md and tools/wififix-ai/STATUS.md for WiFiFix scope. Read tools/strategic-ai/README.md for the reasoning engine, training, benchmark limits, and Android/Termux deployment steps.
