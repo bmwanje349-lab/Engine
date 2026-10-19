@@ -1,41 +1,49 @@
-# Strategic Reasoning AI (experimental v1)
+# Strategic Reasoning AI (experimental v2)
 
-A separate planning and reinforcement-learning engine inside the Engine repository. It does not replace WiFiFix AI. This first version focuses on a verifiable core: exploring multiple possible futures, ranking distinct first actions, learning from rewards and failures, and publishing reproducible benchmark checkpoints.
+A separate planning and reinforcement-learning engine inside the Engine repository. It does not replace WiFiFix AI. The goal is to explore alternatives, score their downstream consequences, learn from stronger search targets, and promote checkpoints only when reproducible held-out evaluations pass.
 
-## What is implemented
+## Planning and learning
 
-- Domain-agnostic Monte Carlo tree search (MCTS): bounded simulations, UCT exploration, stochastic transition branches, discounted-return backpropagation, rollouts, and a ranked set of distinct first moves.
-- Reinforcement learning: tabular Q-learning with epsilon exploration/decay, bootstrapped updates and JSON checkpoint persistence. Failed or low-value actions lower future estimates; high-return decisions receive stronger values.
-- Hybrid reasoning: learned Q-values and a compact neural Q-value approximator act only as bounded priors. Search still explores alternatives and can override stale learned preferences. The network is distilled from the RL table and trained from scratch; it is not a pretrained general reasoning model.
-- Reference environment: a stochastic grid-planning challenge with obstacles, a key/goal dependency, energy constraints, hazards and variable maps. This makes progress measurable but is not general intelligence by itself.
-- Android-ready interface: standard-library Python inference; no paid API and no third-party runtime dependencies at inference. The CLI emits JSON and can run in Termux. A native Kotlin UI/runtime can be added once the engine has stable benchmark results.
-- CI: unit tests, deterministic repeatability, held-out seeded benchmarks, a saved learned policy, metrics and a downloadable Actions artifact.
+- **Bounded Monte Carlo tree search (MCTS):** stochastic transition branches, UCT, discounted returns, rollouts, leaf evaluation, and ranked alternative first actions. Search remains the decision-maker; learned scores are small advisory priors.
+- **Reinforcement learning:** tabular Q-learning provides a compact starting policy for the original stochastic grid world.
+- **Search-distilled neural evaluator:** the grid evaluator is now trained primarily on independent MCTS action-return targets. A small sampled Q-table replay set adds state coverage, but the neural model is not merely trained to copy the whole Q-table.
+- **Cross-domain evaluator:** `strategic_ai/benchmarks.py` defines four controlled families: diminishing-return resource allocation, dependency/deadline scheduling, weighted hazardous route planning, and a two-player take-away game. The first three use single-agent MCTS; the adversarial game uses minimax/negamax targets rather than incorrectly treating the opponent as a cooperative planner.
+- **Comparison and regression gates:** training records search-only, neural-only, hybrid, and random baselines for held-out scenarios. It also runs leave-one-family-out folds in which the evaluator is trained without the test family. A candidate is rejected if search-target validation loss does not improve or if hybrid decision quality regresses beyond the configured margin.
+- **Android/Termux-friendly inference:** exported evaluator weights are JSON; inference uses Python's standard library and needs no NumPy, server, or network access. Training requires NumPy and is intended for free GitHub Actions runners. The included CLI returns decisions for each family.
 
-## Run in GitHub Codespaces, Linux, or Termux
+These are small synthetic benchmarks for controlled testing. They are not real-world task data and do not establish general intelligence.
 
-Python 3.11 or newer is recommended. Inference uses only the Python standard library. Training the neural evaluator requires NumPy, installed automatically by the GitHub Actions workflow.
+## Train and test
+
+From the `tools/strategic-ai` directory (Python 3.11+):
 
     python -m pip install -r requirements.txt
     python -m unittest discover -s tests -v
     python train.py --episodes 500 --eval-episodes 20 --simulations 96 --horizon 18
-    python -m strategic_ai.cli --model artifacts/strategic_policy.json --neural-model artifacts/strategic_neural.json --simulations 512 --horizon 24
+    python train_general.py --epochs 30 --fold-epochs 10 --episodes-per-family 6
 
-On Android Termux, install Python with pkg install python and get this repository. For lightweight deployment, download strategic_policy.json and strategic_neural.json from the latest successful strategic-ai-v1 GitHub Actions artifact, extract them into tools/strategic-ai/artifacts/, then run the CLI command above. Running inference needs no NumPy, server or network permission; training the neural evaluator does require NumPy. GitHub Actions uses free hosted runners subject to current GitHub usage limits and publishes artifacts for 30 days.
+The normal GitHub Actions workflow runs the unit tests, trains the grid Q-table, distills its neural evaluator from independent MCTS targets, then trains the cross-domain evaluator and applies held-out regression gates. It uploads the model weights and JSON metrics as a `strategic-ai-v2-<run-number>` artifact for 30 days. A failed held-out gate intentionally prevents artifact publication.
 
-## How to read results
+## Compare inference methods
 
-artifacts/metrics.json compares a random policy, the learned Q policy, and MCTS-guided planning on held-out generated maps. MCTS reports success rate, average return, mean steps and decision-search visits; its random baseline uses the same held-out map seeds for a fairer comparison. The artifacts contain the learned Q-table and real trained neural weights, not filler data. Seeded synthetic results are reproducible and should not be described as real-world or general-intelligence performance.
+After the general checkpoint exists:
 
-Search scores depend on transition-model quality, reward design, search budget and state representation. A narrow benchmark can be overfit. Before claiming that learning generalizes, expand to different planning domains and use held-out task families, not only new random seeds of one gridworld.
+    python -m strategic_ai.general_cli --model artifacts/strategic_general_neural.json --family resource_allocation --mode hybrid
+    python -m strategic_ai.general_cli --model artifacts/strategic_general_neural.json --family scheduling --mode search
+    python -m strategic_ai.general_cli --model artifacts/strategic_general_neural.json --family route_planning --mode neural
+    python -m strategic_ai.general_cli --model artifacts/strategic_general_neural.json --family adversarial --mode search
 
-## Roadmap
+Modes are `search`, `neural`, and `hybrid`. The adversarial search-only mode uses exact minimax for this bounded game; the hybrid uses bounded neural-guided negamax. Search budgets and horizon limits are checked to avoid unbounded CPU work.
 
-1. This baseline: testable MCTS + Q-learning + reproducible free CI.
-2. Train the neural value/policy evaluator directly against improved-search targets; compare MCTS-only, learned-policy-only and hybrid on multiple held-out task families.
-3. Add an Android Kotlin front end and a stable JSON request/response API, while keeping the planner bounded for phone memory, battery and latency.
-4. Add more domains (resource allocation, route planning, scheduling and adversarial games), stronger uncertainty calibration, ablations and regression-gated model promotion.
-5. Learn from explicitly recorded, non-sensitive feedback. Keep benchmark seeds isolated and never merge unverified user data into evaluation.
+## Android / Termux
 
-## Safety and limits
+Install Python in Termux, download the latest successful workflow artifact from GitHub Actions, and extract its JSON files into `tools/strategic-ai/artifacts/`. Then, from `tools/strategic-ai`, run a command from the section above. For a small phone, start with fewer simulations (for example, 64) and a horizon of 10–12. The neural-only mode is cheaper; hybrid mode spends CPU on search. Training stays on GitHub Actions, and no paid API is required.
 
-This is a specialized experimental planner, not a superintelligence or autonomous all-purpose agent. It does not execute external actions; it evaluates simulated decisions only. The reference environment is synthetic. Good benchmark results demonstrate performance on that benchmark, not universal reasoning ability.
+## Reading the metrics honestly
+
+- `artifacts/metrics.json` measures the original grid-world policy.
+- `artifacts/general_metrics.json` reports random, search-only, neural-only, and hybrid results for each held-out family, the search-generated training-target counts, neural validation loss, and four leave-one-family-out folds.
+- Success rate and mean return describe only these seeded synthetic problems. The adversarial benchmark additionally reports exact minimax regret on held-out pile sizes.
+- A checkpoint is kept only if the MCTS-target validation loss improves and the held-out regression gates pass. Model size alone is never treated as evidence of intelligence.
+
+Search quality still depends on the transition model, reward design, state features, rollout budget, and evaluation coverage. The engine explores multiple candidate futures, but it is an experimental planner—not a superintelligence, a pretrained general-reasoning model, or a substitute for verifying high-stakes decisions.
