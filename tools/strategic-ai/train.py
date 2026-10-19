@@ -36,11 +36,11 @@ def collect_search_targets(seed: int, simulations: int, horizon: int) -> tuple[d
     visited = 0
     target_simulations = max(32, min(96, simulations))
     target_horizon = max(8, min(14, horizon))
-    for map_index in range(12):
+    for map_index in range(24):
         world = make_world(seed + 20000 + map_index * 31)
         rng = random.Random(seed + 80000 + map_index)
         state = world.initial_state()
-        for step_index in range(7):
+        for step_index in range(9):
             if world.terminal(state):
                 break
             legal = list(world.actions(state))
@@ -59,7 +59,7 @@ def collect_search_targets(seed: int, simulations: int, horizon: int) -> tuple[d
                 if action in legal and value == value and abs(value) < 1e6:
                     row[action] = value
             visited += 1
-            action = (rng.choice(legal) if rng.random() < 0.20 else result["best_action"])
+            action = (rng.choice(legal) if rng.random() < 0.60 else result["best_action"])
             if action is None:
                 break
             state, _reward, done, _info = world.step(state, action, rng)
