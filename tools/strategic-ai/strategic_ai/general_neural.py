@@ -285,36 +285,75 @@ class GeneralNeuralPolicy:
         if not train_rows or not val_rows:
             raise ValueError("scenario split produced an empty training or validation set")
 
-        q_train_raw = [value for row in train_rows for value in row["values"].values()]
-        v_train_raw = [max(row["values"].values()) for row in train_rows]
-        q_mean = float(np.mean(q_train_raw))
-        q_scale = float(np.std(q_train_raw))
-        v_mean = float(np.mean(v_train_raw))
-        v_scale = float(np.std(v_train_raw))
-        q_scale = q_scale if math.isfinite(q_scale) and q_scale > 1e-6 else 1.0
-        v_scale = v_scale if math.isfinite(v_scale) and v_scale > 1e-6 else 1.0
+        domain_names = ("resource_allocation", "scheduling", "route_planning", "adversarial")
+        def row_domain(row):
+            return max(range(4), key=lambda index: row["features"][16 + index])
+
+        q_mean, q_scale, v_mean, v_scale = [], [], [], []
+        for domain_id in range(4):
+            domain_rows = [row for row in train_rows if row_domain(row) == domain_id]
+            domain_q = [value for row in domain_rows for value in row["values"].values()]
+            domain_v = [max(row["values"].values()) for row in domain_rows]
+            q_mu = float(np.mean(domain_q)) if domain_q else 0.0
+            q_sd = float(np.std(domain_q)) if domain_q else 1.0
+            v_mu = float(np.mean(domain_v)) if domain_v else 0.0
+            v_sd = float(np.std(domain_v)) if domain_v else 1.0
+            q_mean.append(q_mu)
+            q_scale.append(q_sd if math.isfinite(q_sd) and q_sd > 1e-6 else 1.0)
+            v_mean.append(v_mu)
+            v_scale.append(v_sd if math.isfinite(v_sd) and v_sd > 1e-6 else 1.0)
 
         def make_q_arrays(rows):
-            xs, ys = [], []
+            xs, ys, domains = [], [], []
             for row in rows:
+                domain_id = row_domain(row)
                 for action, value in row["values"].items():
                     action_vector = encode_action_features(row["features"], action)
                     xs.append(row["features"] + list(action_vector))
-                    ys.append([(value - q_mean) / q_scale])
-            return np.asarray(xs, dtype=np.float32), np.asarray(ys, dtype=np.float32)
+                    ys.append([(value - q_mean[domain_id]) / q_scale[domain_id]])
+                    domains.append(domain_id)
+            return (
+                np.asarray(xs, dtype=np.float32),
+                np.asarray(ys, dtype=np.float32),
+                np.asarray(domains, dtype=np.int32),
+            )
 
         def make_v_arrays(rows):
-            xs, ys = [], []
+            xs, ys, domains = [], [], []
             zero_action = [0.0] * ACTION_FEATURES
             for row in rows:
+                domain_id = row_domain(row)
                 xs.append(row["features"] + zero_action)
-                ys.append([(max(row["values"].values()) - v_mean) / v_scale])
-            return np.asarray(xs, dtype=np.float32), np.asarray(ys, dtype=np.float32)
+                ys.append([(max(row["values"].values()) - v_mean[domain_id]) / v_scale[domain_id]])
+                domains.append(domain_id)
+            return (
+                np.asarray(xs, dtype=np.float32),
+                np.asarray(ys, dtype=np.float32),
+                np.asarray(domains, dtype=np.int32),
+            )
 
-        Xq, Yq = make_q_arrays(train_rows)
-        Xqv, Yqv = make_q_arrays(val_rows)
-        Xv, Yv = make_v_arrays(train_rows)
-        Xvv, Yvv = make_v_arrays(val_rows)
+        def balance_domains(x, y, domains):
+            """Oversample smaller domains to equalize gradient contribution."""
+            by_domain = [np.flatnonzero(domains == domain_id) for domain_id in range(4)]
+            nonempty = [indices for indices in by_domain if len(indices)]
+            if len(nonempty) < 2:
+                return x, y
+            target = max(len(indices) for indices in nonempty)
+            selected = []
+            for indices in nonempty:
+                chosen = list(indices)
+                if len(indices) < target:
+                    chosen.extend(rng.choice(indices, size=target - len(indices), replace=True).tolist())
+                selected.extend(chosen)
+            order = rng.permutation(np.asarray(selected, dtype=np.int64))
+            return x[order], y[order]
+
+        Xq, Yq, Dq = make_q_arrays(train_rows)
+        Xqv, Yqv, Dqv = make_q_arrays(val_rows)
+        Xv, Yv, Dv = make_v_arrays(train_rows)
+        Xvv, Yvv, Dvv = make_v_arrays(val_rows)
+        Xq, Yq = balance_domains(Xq, Yq, Dq)
+        Xv, Yv = balance_domains(Xv, Yv, Dv)
         params = {
             "W1": rng.normal(0, math.sqrt(2 / NETWORK_INPUTS), (NETWORK_INPUTS, HIDDEN1)).astype(np.float32),
             "b1": np.zeros(HIDDEN1, np.float32),
