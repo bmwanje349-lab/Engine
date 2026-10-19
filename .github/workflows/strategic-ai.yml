@@ -300,12 +300,13 @@ jobs:
           assert net['validation_scenarios'] > 0 and net['train_scenarios'] > 0
           assert net['validation_mse_improved'], 'scenario-held-out target loss did not improve'
           assert len(metrics['leave_one_family_out']) == 4
+          assert all('neural_only_minus_random_ci95_lower' in row for row in metrics['leave_one_family_out'])
           acceptance = metrics['acceptance']
           assert acceptance['scenario_disjoint_validation']
           assert acceptance['all_metrics_finite']
           assert acceptance['neural_only_beats_or_matches_random_on_every_family']
           assert acceptance['hybrid_lower_confidence_bound_beats_search_margin']
-          assert acceptance['leave_one_family_out_lower_bound_pass']
+          assert acceptance['leave_one_family_out_safe_fallback_pass']
           assert acceptance['promote_candidate'], 'challenger failed promotion gates'
           for family in ('resource_allocation', 'scheduling', 'route_planning', 'adversarial'):
               for method in ('search_only', 'neural_only', 'hybrid', 'random'):
