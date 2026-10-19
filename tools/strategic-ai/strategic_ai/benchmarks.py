@@ -391,9 +391,13 @@ def nim_hybrid_action_values(stones: int, neural, *, depth: int = 5) -> tuple[di
     """Bounded adversarial look-ahead with a small neural leaf-value contribution."""
     if depth < 1:
         raise ValueError("depth must be positive")
+    # Never let an evaluator trained only on other domains steer an adversarial
+    # search. Fall back to exact minimax until this checkpoint has game data.
+    if hasattr(neural, "supports_features") and not neural.supports_features(NimProblem(stones).features(stones)):
+        return nim_action_values(stones), 0
     nodes = 0
 
-    def negamax(n: int, remaining: int) -> float:
+    def negamax(n: int, remaining: int) float:
         nonlocal nodes
         nodes += 1
         if n <= 0:
