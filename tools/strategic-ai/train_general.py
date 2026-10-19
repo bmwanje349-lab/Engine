@@ -15,7 +15,7 @@ from strategic_ai.benchmarks import (
     nim_hybrid_action_values,
 )
 from strategic_ai.gridworld import ACTIONS
-from strategic_ai.neural import NeuralPolicy
+from strategic_ai.general_neural import GeneralNeuralPolicy
 from strategic_ai.search import plan
 
 
@@ -30,7 +30,7 @@ def _prior(problem, state, action, neural):
     values = _neural_values(problem, state, neural)
     legal_values = [float(values[ACTIONS.index(a)]) for a in actions]
     center = sum(legal_values) / len(legal_values)
-    return max(-1.0, min(1.0, (float(values[ACTIONS.index(action)]) - center) / 5.0))
+    return max(-1.0, min(1.0, (float(values[ACTIONS.index(action)]) - center) / 1.5))
 
 
 def _choose_neural(problem, state, neural):
@@ -42,14 +42,15 @@ def _choose_neural(problem, state, neural):
 
 
 def collect_search_targets(seed: int, target_simulations: int, target_horizon: int,
-                           scenarios_per_family: int = 6, states_per_scenario: int = 6):
+                           scenarios_per_family: int = 24, states_per_scenario: int = 12,
+                           nim_train_max: int = 60):
     """Label reachable states with MCTS or exact adversarial minimax action values."""
     targets: dict[str, dict[str, float]] = {}
     target_states = 0
     target_actions = 0
     # Exact adversarial values are stronger than noisy rollouts for this small,
     # fully observable two-player game. Eval piles are deliberately larger.
-    for stones in range(1, 31):
+    for stones in range(1, nim_train_max + 1):
         problem = NimProblem(stones)
         key = encode_features(problem.features(stones))
         targets[key] = nim_action_values(stones)
@@ -58,7 +59,7 @@ def collect_search_targets(seed: int, target_simulations: int, target_horizon: i
 
     for family_index, family in enumerate(FAMILIES[:3]):
         for scenario in range(scenarios_per_family):
-            problem_seed = seed + family_index * 10000 + scenario * 97
+            problem_seed = seed + family_index * 100000 + scenario * 97
             problem = make_problem(family, problem_seed)
             state = problem.initial_state()
             rng = random.Random(problem_seed + 9001)
@@ -86,7 +87,7 @@ def collect_search_targets(seed: int, target_simulations: int, target_horizon: i
                     break
                 # Keep both strong-search states and off-policy branches in the
                 # target set so the evaluator does not only see one preferred path.
-                action = (rng.choice(legal) if rng.random() < 0.25
+                action = (rng.choice(legal) if rng.random() < 0.55
                           else result["best_action"])
                 if action is None:
                     break
@@ -134,7 +135,7 @@ def _episode(problem, family, method, neural, seed, simulations, horizon):
             result = plan(
                 problem, state, simulations=simulations, horizon=horizon,
                 seed=seed + steps * 17, top_k=5,
-                action_prior=prior, prior_weight=(0.0 if prior is None else 0.035),
+                action_prior=prior, prior_weight=(0.0 if prior is None else 0.08),
             )
             visits += int(result.get("root_visits", 0))
             action = result["best_action"]
@@ -167,9 +168,10 @@ def _summarize(rows):
     }
 
 
-def evaluate_nim_positions(neural, stones_values=range(31, 37)):
+def evaluate_nim_positions(neural, stones_values=range(61, 81), seed=719):
     """Report decision accuracy and exact minimax regret on unseen pile sizes."""
-    methods = {"search_only": [], "neural_only": [], "hybrid": []}
+    methods = {"random": [], "search_only": [], "neural_only": [], "hybrid": []}
+    rng = random.Random(seed)
     for stones in stones_values:
         problem = NimProblem(stones)
         legal = list(problem.actions(stones))
@@ -179,7 +181,9 @@ def evaluate_nim_positions(neural, stones_values=range(31, 37)):
         hybrid_values, nodes = nim_hybrid_action_values(stones, neural, depth=5)
         hybrid_action = max(legal, key=lambda a: (hybrid_values[a], -ACTIONS.index(a)))
         search_action = max(legal, key=lambda a: (exact[a], -ACTIONS.index(a)))
+        random_action = rng.choice(legal)
         for name, action, count in (
+            ("random", random_action, 0),
             ("search_only", search_action, 0),
             ("neural_only", predicted, 0),
             ("hybrid", hybrid_action, nodes),
@@ -220,9 +224,12 @@ def evaluate_family(family, neural, *, seed, episodes, simulations, horizon):
 
 def _family_id_from_key(key):
     fields = key.split(",")
-    if len(fields) != 11:
+    if len(fields) != 32:
         return None
-    return int(fields[4])
+    domain = [float(value) for value in fields[16:20]]
+    if abs(sum(domain) - 1.0) > 1e-5:
+        return None
+    return max(range(4), key=lambda index: domain[index])
 
 
 def leave_one_family_out(targets, *, seed, epochs, eval_episodes, simulations, horizon):
@@ -233,7 +240,7 @@ def leave_one_family_out(targets, *, seed, epochs, eval_episodes, simulations, h
     for heldout_id, family in id_to_family.items():
         fold_targets = {key: row for key, row in targets.items()
                         if _family_id_from_key(key) != heldout_id}
-        fold_model, fold_metrics = NeuralPolicy.distill(
+        fold_model, fold_metrics = GeneralNeuralPolicy.distill(
             fold_targets, epochs=epochs, seed=seed + 100 + heldout_id)
         evaluated = evaluate_family(
             family, fold_model, seed=seed + 200000 + heldout_id * 1000,
@@ -266,21 +273,28 @@ def main():
     parser.add_argument("--eval-simulations", type=int, default=48)
     parser.add_argument("--target-horizon", type=int, default=10)
     parser.add_argument("--eval-horizon", type=int, default=12)
-    parser.add_argument("--fold-eval-episodes", type=int, default=3)
+    parser.add_argument("--fold-eval-episodes", type=int, default=4)
+    parser.add_argument("--target-scenarios", type=int, default=24)
+    parser.add_argument("--target-states", type=int, default=12)
+    parser.add_argument("--train-nim-max", type=int, default=60)
     parser.add_argument("--out", default="artifacts/strategic_general_neural.json")
     parser.add_argument("--metrics", default="artifacts/general_metrics.json")
     args = parser.parse_args()
-    if not 2 <= args.episodes_per_family <= 100 or not 8 <= args.target_simulations <= 5000:
+    if not 4 <= args.episodes_per_family <= 100 or not 8 <= args.target_simulations <= 5000:
         raise SystemExit("scenario count or target search budget outside configured bounds")
     if not 8 <= args.eval_simulations <= 5000 or not 4 <= args.target_horizon <= 100:
         raise SystemExit("evaluation or target horizon outside configured bounds")
-    if not 4 <= args.eval_horizon <= 100 or not 1 <= args.epochs <= 300 or not 1 <= args.fold_epochs <= 100:
+    if (not 4 <= args.eval_horizon <= 100 or not 1 <= args.epochs <= 300 or not 1 <= args.fold_epochs <= 100
+            or not 4 <= args.target_scenarios <= 100 or not 4 <= args.target_states <= 60
+            or not 30 <= args.train_nim_max <= 100):
         raise SystemExit("training epochs or search horizon outside configured bounds")
 
     started = time.time()
     targets, target_summary = collect_search_targets(
-        args.seed, args.target_simulations, args.target_horizon)
-    neural, neural_metrics = NeuralPolicy.distill(
+        args.seed, args.target_simulations, args.target_horizon,
+        scenarios_per_family=args.target_scenarios, states_per_scenario=args.target_states,
+        nim_train_max=args.train_nim_max)
+    neural, neural_metrics = GeneralNeuralPolicy.distill(
         targets, epochs=args.epochs, seed=args.seed + 7)
     neural_path = Path(args.out)
     neural.save(neural_path)
@@ -307,8 +321,19 @@ def main():
 
     family_holdout_min_delta = min(row["hybrid_minus_search_return"] for row in folds)
     aggregate_min_delta = min(deltas.values())
+    neural_vs_random = {}
+    for family, scores in heldout.items():
+        if "random" in scores:
+            neural_vs_random[family] = round(
+                scores["neural_only"]["mean_return"] - scores["random"]["mean_return"], 5)
+        else:
+            neural_vs_random[family] = round(
+                scores["neural_only"]["mean_return"] - scores["search_only"]["mean_return"], 5)
+    neural_baseline_pass = all(value >= 0.0 for value in neural_vs_random.values())
     acceptance = {
         "search_target_validation_mse_improved": bool(neural_metrics["validation_mse_improved"]),
+        "neural_only_vs_baseline_return_deltas": neural_vs_random,
+        "neural_only_beats_or_matches_baseline_on_every_family": neural_baseline_pass,
         "held_out_hybrid_vs_search_deltas": deltas,
         "leave_one_family_out_hybrid_min_delta": family_holdout_min_delta,
         "all_metrics_finite": all(
@@ -319,12 +344,13 @@ def main():
         ),
         "promote_candidate": bool(
             neural_metrics["validation_mse_improved"]
-            and aggregate_min_delta >= -4.0
-            and family_holdout_min_delta >= -4.0
+            and neural_baseline_pass
+            and aggregate_min_delta >= -2.0
+            and family_holdout_min_delta >= -2.0
         ),
     }
     metrics = {
-        "model": "StrategicReasoner-GeneralSearchDistilled-v2",
+        "model": "StrategicReasoner-GeneralSearchDistilled-v3",
         "training": {
             "families": list(FAMILIES),
             "target_generation": target_summary,
