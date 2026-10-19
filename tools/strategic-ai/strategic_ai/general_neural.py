@@ -18,6 +18,27 @@ from .gridworld import ACTIONS
 INPUTS, HIDDEN1, HIDDEN2 = 32, 96, 64
 NETWORK_INPUTS = INPUTS + ACTION_FEATURES
 FORMAT = "strategic-ai-general-neural-v4-puct"
+def normalized_action_prior(action_values, action, *, limit: float = 2.0) -> float:
+    """Convert return-scale Q estimates into bounded, relative PUCT prior logits.
+
+    Raw returns have different scales across benchmark families. Feeding them
+    directly into softmax can make a model's prior almost deterministic before
+    search has tested the branch. Per-state standardization preserves ordering
+    while preventing large rewards from overwhelming tree exploration.
+    """
+    if action not in action_values or not action_values:
+        return 0.0
+    scores = [float(value) for value in action_values.values() if math.isfinite(float(value))]
+    if not scores:
+        return 0.0
+    mean = sum(scores) / len(scores)
+    variance = sum((value - mean) ** 2 for value in scores) / len(scores)
+    scale = math.sqrt(variance)
+    if not math.isfinite(scale) or scale < 1e-8:
+        return 0.0
+    score = (float(action_values[action]) - mean) / scale
+    return max(-limit, min(limit, score))
+
 LEGACY_FORMAT = "strategic-ai-general-neural-v3"
 
 
