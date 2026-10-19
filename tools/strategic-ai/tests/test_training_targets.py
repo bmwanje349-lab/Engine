@@ -12,7 +12,13 @@ class SearchGeneratedTrainingTargetTests(unittest.TestCase):
         )
         self.assertGreaterEqual(len(targets), 30)
         self.assertGreater(report["target_action_values"], 0)
-        family_ids = {int(key.split(",")[4]) for key in targets}
+        family_ids = set()
+        for key in targets:
+            features = [float(value) for value in key.split(",")]
+            self.assertEqual(len(features), 32)
+            domain = features[16:20]
+            self.assertAlmostEqual(sum(domain), 1.0)
+            family_ids.add(max(range(4), key=lambda index: domain[index]))
         self.assertEqual(family_ids, {0, 1, 2, 3})
         for row in targets.values():
             self.assertTrue(row)
