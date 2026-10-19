@@ -145,7 +145,7 @@ jobs:
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: strategic-ai-v2-${{ github.run_number }}
+          name: strategic-ai-v3-${{ github.run_number }}
           path: |
             tools/strategic-ai/artifacts/strategic_policy.json
             tools/strategic-ai/artifacts/strategic_neural.json
