@@ -74,7 +74,7 @@ jobs:
           PY
       - name: Train cross-domain evaluator and validate held-out task families
         run: |
-          python train_general.py --seed 410 --epochs 25 --fold-epochs 8 --episodes-per-family 3 --target-simulations 16 --eval-simulations 24 --target-horizon 8 --eval-horizon 8 --fold-eval-episodes 2 --out artifacts/strategic_general_neural.json --metrics artifacts/general_metrics.json
+          python train_general.py --seed 410 --epochs 45 --fold-epochs 20 --episodes-per-family 12 --target-simulations 32 --eval-simulations 48 --target-horizon 10 --eval-horizon 12 --fold-eval-episodes 8 --target-scenarios 24 --target-states 12 --train-nim-max 60 --out artifacts/strategic_general_neural.json --metrics artifacts/general_metrics.json
           python - <<'PY'
           import json, math
           from pathlib import Path
@@ -85,6 +85,7 @@ jobs:
           assert m['training']['neural_distillation']['validation_mse_improved']
           assert len(m['leave_one_family_out']) == 4
           assert m['acceptance']['all_metrics_finite']
+          assert m['acceptance']['neural_only_beats_or_matches_baseline_on_every_family']
           assert m['acceptance']['promote_candidate'], 'held-out regression gate rejected candidate'
           for family in ('resource_allocation','scheduling','route_planning','adversarial'):
               metrics=m['held_out_scenarios'][family]
