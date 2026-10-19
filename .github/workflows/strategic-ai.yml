@@ -424,9 +424,9 @@ jobs:
         working-directory: tools/strategic-ai
         shell: bash
         run: |
-          tag="strategic-ai-v4-$RUN_NUMBER"
+          tag="strategic-ai-v5-$RUN_NUMBER"
           mapfile -t assets < <(find artifacts -maxdepth 1 -type f \( -name '*.json' -o -name 'SHA256SUMS' \) -print | sort)
           gh release create "$tag" "${assets[@]}" \
-            --title "Strategic AI v4 — run $RUN_NUMBER" \
+            --title "Strategic AI v5 — run $RUN_NUMBER" \
             --latest \
             --notes "Accepted cross-domain action-value checkpoint with PUCT and expert iteration. Models are tested on controlled synthetic benchmarks; scores are not evidence of general intelligence or real-world guarantees. Download: curl -fL -o strategic_general_neural.json https://github.com/bmwanje349-lab/Engine/releases/latest/download/strategic_general_neural.json. Verify assets: curl -fL -o SHA256SUMS https://github.com/bmwanje349-lab/Engine/releases/latest/download/SHA256SUMS && sha256sum -c SHA256SUMS."
