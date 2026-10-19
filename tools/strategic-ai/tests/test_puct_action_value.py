@@ -106,11 +106,11 @@ class PuctAndActionValueTests(unittest.TestCase):
             problem = ResourceAllocationProblem(scenario_seed)
             feature_key = encode_features(problem.features(problem.initial_state()))
             targets[f"scenario-{scenario_seed}|{feature_key}"] = {
-                "UP": 1.0 + scenario_seed % 3,
-                "RIGHT": 2.0,
-                "DOWN": 0.5,
-                "LEFT": -0.5,
-                "REST": -1.0,
+                RESOURCE_ACTIONS[0]: 1.0 + scenario_seed % 3,
+                RESOURCE_ACTIONS[1]: 2.0,
+                RESOURCE_ACTIONS[2]: 0.5,
+                RESOURCE_ACTIONS[3]: -0.5,
+                RESOURCE_ACTIONS[4]: -1.0,
             }
             if len(targets) >= 70:
                 break
