@@ -7,7 +7,7 @@ import sys
 
 from .benchmarks import FAMILIES, NimProblem, make_problem, nim_action_values, nim_hybrid_action_values
 from .gridworld import ACTIONS
-from .neural import NeuralPolicy
+from .general_neural import GeneralNeuralPolicy
 from .search import plan
 
 
@@ -23,7 +23,7 @@ def main():
     if not 8 <= args.simulations <= 5000 or not 4 <= args.horizon <= 100:
         parser.error("simulations must be 8..5000 and horizon must be 4..100")
     try:
-        neural = NeuralPolicy.load(args.model)
+        neural = GeneralNeuralPolicy.load(args.model)
         problem = make_problem(args.family, args.seed)
         state = problem.initial_state()
         legal = list(problem.actions(state))
