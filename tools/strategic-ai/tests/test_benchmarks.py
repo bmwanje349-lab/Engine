@@ -6,6 +6,7 @@ from strategic_ai.benchmarks import (
     SchedulingProblem, make_problem, nim_action_values, nim_hybrid_action_values, nim_value,
 )
 from strategic_ai.gridworld import ACTIONS
+from strategic_ai.action_encoding import SCHEDULING_ACTIONS, NIM_ACTIONS
 from strategic_ai.search import plan
 
 
@@ -59,11 +60,11 @@ class BenchmarkFamilyTests(unittest.TestCase):
     def test_schedule_dependency_rules_are_enforced(self):
         problem = SchedulingProblem(19)
         state = problem.initial_state()
-        self.assertEqual(problem.actions(state)[0], "UP")
-        state, _reward, _done, _info = problem.step(state, "UP", random.Random(1))
-        self.assertIn("RIGHT", problem.actions(state))
-        self.assertIn("DOWN", problem.actions(state))
-        self.assertNotIn("LEFT", problem.actions(state))
+        self.assertEqual(problem.actions(state)[0], SCHEDULING_ACTIONS[0])
+        state, _reward, _done, _info = problem.step(state, SCHEDULING_ACTIONS[0], random.Random(1))
+        self.assertIn(SCHEDULING_ACTIONS[1], problem.actions(state))
+        self.assertIn(SCHEDULING_ACTIONS[2], problem.actions(state))
+        self.assertNotIn(SCHEDULING_ACTIONS[3], problem.actions(state))
 
     def test_route_has_a_safe_corridor_and_finite_rewards(self):
         problem = RoutePlanningProblem(7)
@@ -81,10 +82,10 @@ class BenchmarkFamilyTests(unittest.TestCase):
         self.assertEqual(nim_value(6), -1.0)
         self.assertEqual(nim_value(7), 1.0)
         values = nim_action_values(7)
-        self.assertEqual(values["UP"], 1.0)
+        self.assertEqual(values[NIM_ACTIONS[0]], 1.0)
         self.assertEqual(max(values.values()), 1.0)
         hybrid, nodes = nim_hybrid_action_values(7, ZeroEvaluator(), depth=5)
-        self.assertEqual(max(hybrid.values()), hybrid["UP"])
+        self.assertEqual(max(hybrid.values()), hybrid[NIM_ACTIONS[0]])
         self.assertGreater(nodes, 0)
 
     def test_factory_rejects_unknown_benchmark_family(self):
