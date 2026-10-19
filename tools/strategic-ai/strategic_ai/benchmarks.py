@@ -114,13 +114,13 @@ class SchedulingProblem:
         self.dependencies = (0, 1, 1, (1 << 1) | (1 << 2))
 
     def initial_state(self):
-        return (0, 0, False, 0)  # completed mask, clock, wait-used, decisions
+        return (0, 0, False, 0, 0)  # completed mask, clock, wait-used, decisions, late-job mask
 
     def key(self, state):
         return state
 
     def terminal(self, state):
-        mask, clock, _wait_used, decisions = state
+        mask, clock, _wait_used, decisions, _late_mask = state
         return mask == 0b1111 or clock >= self.max_time or decisions >= 6
 
     def _ready(self, mask):
@@ -130,7 +130,7 @@ class SchedulingProblem:
     def actions(self, state):
         if self.terminal(state):
             return ()
-        mask, clock, wait_used, _decisions = state
+        mask, clock, wait_used, _decisions, _late_mask = state
         choices = [ACTIONS[i] for i in self._ready(mask)]
         if not wait_used and clock < self.max_time - 1:
             choices.append("REST")
@@ -140,7 +140,7 @@ class SchedulingProblem:
         del rng
         if action not in self.actions(state):
             return state, -2.0, self.terminal(state), {"invalid_action": True}
-        mask, clock, wait_used, decisions = state
+        mask, clock, wait_used, decisions, late_mask = state
         reward = -0.10
         completed = mask
         new_clock = clock
@@ -158,20 +158,17 @@ class SchedulingProblem:
             if lateness == 0:
                 reward += 0.45
             completed |= 1 << i
+            if lateness > 0:
+                late_mask |= 1 << i
             if completed == 0b1111:
                 reward += 3.0
-        nxt = (completed, new_clock, new_wait_used, decisions + 1)
+        nxt = (completed, new_clock, new_wait_used, decisions + 1, late_mask)
         done = self.terminal(nxt)
-        on_time = all(
-            # Finish time is not stored per job; deadline penalties are already
-            # part of the reward, so the terminal success flag uses the clock cap.
-            self.deadlines[i] >= 0 for i in range(4)
-        )
-        success = bool(done and completed == 0b1111 and new_clock <= self.max_time and on_time)
+        success = bool(done and completed == 0b1111 and new_clock <= self.max_time and late_mask == 0)
         return nxt, reward, done, {"success": success, "job_completed": action if action != "REST" else None}
 
     def evaluate(self, state):
-        mask, clock, _wait_used, _decisions = state
+        mask, clock, _wait_used, _decisions, _late_mask = state
         value = -0.30 * clock
         for i in range(4):
             if not (mask & (1 << i)):
@@ -180,7 +177,7 @@ class SchedulingProblem:
         return value
 
     def features(self, state):
-        mask, clock, _wait_used, _decisions = state
+        mask, clock, _wait_used, _decisions, _late_mask = state
         slack = [max(-5, min(5, self.deadlines[i] - clock - self.durations[i])) for i in range(4)]
         ready = self._ready(mask)
         ready_flags = [int(i in ready) for i in range(4)]
