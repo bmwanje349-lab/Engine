@@ -542,7 +542,7 @@ def main():
         ),
     }
     metrics = {
-        "model": "StrategicReasoner-GeneralActionQValue-PUCT-v4",
+        "model": "StrategicReasoner-GeneralActionQValue-PUCT-v5-balanced-domains",
         "training": {
             "families": list(FAMILIES),
             "initial_target_generation": target_summary,
