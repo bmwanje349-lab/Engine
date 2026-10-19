@@ -88,10 +88,17 @@ class ResourceAllocationProblem:
 
     def features(self, state):
         allocated, decisions = state
-        needs = [max(0, min(5, self.demands[i] - allocated[i])) for i in range(4)]
         remaining = max(0, self.budget - sum(allocated))
-        value_flags = [int(v >= 4) for v in self.values]
-        return tuple(needs + [self.domain_id, min(5, decisions), min(5, remaining)] + value_flags)
+        needs = [(self.demands[i] - allocated[i]) / max(1, self.demands[i]) for i in range(4)]
+        values = [self.values[i] / 5.0 for i in range(4)]
+        allocated_ratio = [allocated[i] / max(1, self.demands[i]) for i in range(4)]
+        marginal = [max(0.0, self.values[i] * (1.0 - 0.18 * allocated[i]) - 0.10) / 5.0 for i in range(4)]
+        next_marginal = [max(0.0, self.values[i] * (1.0 - 0.18 * (allocated[i] + 1)) - 0.10) / 5.0 for i in range(4)]
+        domain = [1.0, 0.0, 0.0, 0.0]
+        context = [remaining / max(1, self.budget), decisions / self.max_decisions,
+                   sum(allocated) / max(1, self.budget), min(1.0, remaining / 2.0)]
+        legal = [float(self.demands[i] > allocated[i] and remaining > 0) for i in range(4)]
+        return tuple(needs + values + allocated_ratio + marginal + domain + context + legal + next_marginal)
 
 
 class SchedulingProblem:
@@ -177,11 +184,19 @@ class SchedulingProblem:
         return value
 
     def features(self, state):
-        mask, clock, _wait_used, _decisions, _late_mask = state
-        slack = [max(-5, min(5, self.deadlines[i] - clock - self.durations[i])) for i in range(4)]
+        mask, clock, wait_used, decisions, late_mask = state
+        unfinished = [float(not (mask & (1 << i))) for i in range(4)]
+        priorities = [self.priorities[i] / 4.0 for i in range(4)]
+        slack = [max(-1.0, min(1.0, (self.deadlines[i] - clock - self.durations[i]) / 6.0)) for i in range(4)]
+        durations = [self.durations[i] / 3.0 for i in range(4)]
+        domain = [0.0, 1.0, 0.0, 0.0]
+        remaining_duration = sum(self.durations[i] for i in range(4) if not (mask & (1 << i)))
+        context = [clock / self.max_time, float(wait_used), mask.bit_count() / 4.0,
+                   min(1.0, remaining_duration / self.max_time)]
         ready = self._ready(mask)
-        ready_flags = [int(i in ready) for i in range(4)]
-        return tuple(slack + [self.domain_id, min(5, clock // 2), min(5, mask.bit_count())] + ready_flags)
+        ready_flags = [float(i in ready) for i in range(4)]
+        dependencies_met = [float((mask & self.dependencies[i]) == self.dependencies[i]) for i in range(4)]
+        return tuple(unfinished + priorities + slack + durations + domain + context + ready_flags + dependencies_met)
 
 
 class RoutePlanningProblem:
@@ -276,15 +291,21 @@ class RoutePlanningProblem:
 
     def features(self, state):
         x, y, energy, steps = state
-        up = self._neighbor(x, y, "UP")
-        right = self._neighbor(x, y, "RIGHT")
-        costs = [
-            -5 if up is None else self.rough[up],
-            -5 if right is None else self.rough[right],
-        ]
-        legal_flags = [int(self._neighbor(x, y, a) is not None) for a in ACTIONS[:4]]
-        return tuple([self.goal[0] - x, self.goal[1] - y, *costs, self.domain_id,
-                      min(5, energy // 3), min(5, steps // 4), *legal_flags])
+        actions = ACTIONS[:4]
+        neighbors = [self._neighbor(x, y, action) for action in actions]
+        legal = [float(point is not None) for point in neighbors]
+        costs = [1.0 if point is None else self.rough[point] / 2.0 for point in neighbors]
+        risks = [0.0 if point is None else float(point in self.hazards) for point in neighbors]
+        distance = lambda point: abs(self.goal[0] - point[0]) + abs(self.goal[1] - point[1])
+        current_distance = distance((x, y))
+        next_distance = [current_distance if point is None else distance(point) for point in neighbors]
+        next_distance = [max(0.0, min(1.0, d / 8.0)) for d in next_distance]
+        domain = [0.0, 0.0, 1.0, 0.0]
+        context = [(self.goal[0] - x) / 4.0, (self.goal[1] - y) / 4.0,
+                   energy / self.max_energy, steps / self.max_steps]
+        expected_cost = [min(1.0, costs[i] + 0.25 * risks[i]) for i in range(4)]
+        distance_gain = [max(-1.0, min(1.0, (current_distance - d) / 4.0)) for d in [current_distance if p is None else distance(p) for p in neighbors]]
+        return tuple(legal + costs + risks + next_distance + domain + context + expected_cost + distance_gain)
 
 
 class NimProblem:
@@ -327,11 +348,17 @@ class NimProblem:
 
     def features(self, state):
         stones = max(0, int(state))
-        # Piecewise count plus modular indicators makes the input meaningful
-        # for piles larger than the training interval.
-        bands = [min(5, max(0, stones - 5 * i)) for i in range(4)]
-        residues = [stones % 6 == i for i in range(4)]
-        return tuple(bands + [self.domain_id, stones % 6, stones % 5] + [int(v) for v in residues])
+        next_counts = [max(0, stones - take) for take in range(1, 5)]
+        remaining = [(-1.0 if stones < take else min(1.0, (stones - take) / 100.0)) for take in range(1, 5)]
+        next_residue = [((stones - take) % 6) / 5.0 if stones >= take else -1.0 for take in range(1, 5)]
+        legal = [float(stones >= take) for take in range(1, 5)]
+        parity = [float((stones - take) % 2) if stones >= take else -1.0 for take in range(1, 5)]
+        domain = [0.0, 0.0, 0.0, 1.0]
+        context = [min(1.0, stones / 100.0), (stones % 6) / 5.0,
+                   (stones % 5) / 4.0, float(stones % 2)]
+        taking_sizes = [take / 5.0 for take in range(1, 5)]
+        residue_onehot = [float(stones % 5 == residue) for residue in range(1, 5)]
+        return tuple(remaining + next_residue + legal + parity + domain + context + taking_sizes + residue_onehot)
 
 
 @lru_cache(maxsize=2048)
@@ -401,6 +428,6 @@ FAMILIES = ("resource_allocation", "scheduling", "route_planning", "adversarial"
 
 
 def encode_features(features) -> str:
-    if len(features) != 11:
-        raise ValueError("benchmark feature vectors must have exactly 11 values")
-    return ",".join(str(int(v)) for v in features)
+    if len(features) != 32:
+        raise ValueError("general benchmark feature vectors must have exactly 32 values")
+    return ",".join(f"{float(v):.7g}" for v in features)
