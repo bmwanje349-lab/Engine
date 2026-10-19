@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 INPUTS, HIDDEN1, HIDDEN2, OUTPUTS = 32, 96, 64, 5
-FORMAT = "strategic-ai-general-neural-v2"
+FORMAT = "strategic-ai-general-neural-v3"
 
 
 def _features(values):
@@ -29,7 +29,10 @@ def _features(values):
 class GeneralNeuralPolicy:
     """Small 32-96-64-5 MLP; output values are state-relative action advantages."""
 
-    def __init__(self, W1, b1, W2, b2, W3, b3):
+    def __init__(self, W1, b1, W2, b2, W3, b3, trained_domains=None):
+        self.trained_domains = frozenset(range(4) if trained_domains is None else (int(v) for v in trained_domains))
+        if not self.trained_domains or any(value not in range(4) for value in self.trained_domains):
+            raise ValueError("general neural checkpoint has invalid trained-domain metadata")
         self.W1, self.b1 = W1, b1
         self.W2, self.b2 = W2, b2
         self.W3, self.b3 = W3, b3
@@ -47,6 +50,15 @@ class GeneralNeuralPolicy:
         for vector in (b1, b2, b3):
             if not all(isinstance(x, (int, float)) and math.isfinite(x) for x in vector):
                 raise ValueError("general neural checkpoint contains non-finite biases")
+
+    def supports_features(self, features) -> bool:
+        """Return whether this checkpoint was trained on the feature's domain."""
+        values = _features(features)
+        domain = values[16:20]
+        if len(domain) != 4 or abs(sum(domain) - 1.0) > 1e-5 or max(domain) < 0.5:
+            return False
+        domain_id = max(range(4), key=lambda index: domain[index])
+        return domain_id in self.trained_domains
 
     def predict_features(self, features) -> list[float]:
         x = _features(features)
@@ -71,6 +83,7 @@ class GeneralNeuralPolicy:
             "hidden": [HIDDEN1, HIDDEN2], "outputs": OUTPUTS,
             "W1": self.W1, "b1": self.b1, "W2": self.W2, "b2": self.b2,
             "W3": self.W3, "b3": self.b3,
+            "trained_domains": sorted(self.trained_domains),
             "target_semantics": "per-state standardized action-value advantage",
             "inference": "pure-python-standard-library",
         }
@@ -87,8 +100,11 @@ class GeneralNeuralPolicy:
                 or payload.get("hidden") != [HIDDEN1, HIDDEN2]
                 or payload.get("outputs") != OUTPUTS):
             raise ValueError("unsupported or incompatible general Strategic AI checkpoint")
+        domains = payload.get("trained_domains")
+        if not isinstance(domains, list):
+            raise ValueError("general neural checkpoint is missing trained-domain metadata")
         return cls(payload["W1"], payload["b1"], payload["W2"], payload["b2"],
-                   payload["W3"], payload["b3"])
+                   payload["W3"], payload["b3"], trained_domains=domains)
 
     @classmethod
     def distill(cls, targets: dict[str, dict[str, float]], *, epochs: int = 50,
@@ -201,8 +217,13 @@ class GeneralNeuralPolicy:
         params = best
         if not all(np.isfinite(array).all() for array in params.values()):
             raise ValueError("general neural training produced non-finite parameters")
+        trained_domains = sorted({
+            max(range(4), key=lambda index: float(features[16 + index]))
+            for features in rows_x
+        })
         net = cls(params["W1"].tolist(), params["b1"].tolist(), params["W2"].tolist(),
-                  params["b2"].tolist(), params["W3"].tolist(), params["b3"].tolist())
+                  params["b2"].tolist(), params["W3"].tolist(), params["b3"].tolist(),
+                  trained_domains=trained_domains)
         return net, {
             "train_states": int(len(train_ix)), "validation_states": int(len(val_ix)),
             "input_features": INPUTS, "hidden_sizes": [HIDDEN1, HIDDEN2],
@@ -212,4 +233,5 @@ class GeneralNeuralPolicy:
             "validation_mse_improved": bool(best_loss < initial_mse),
             "best_epoch": best_epoch, "epochs": epochs,
             "target_scaling": "per-state standardized action-value advantage",
+            "trained_domains": trained_domains,
         }
