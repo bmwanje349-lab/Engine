@@ -2,7 +2,7 @@ import math
 import unittest
 
 from strategic_ai.action_encoding import encode_action_features
-from strategic_ai.benchmarks import ResourceAllocationProblem, RoutePlanningProblem, encode_features
+from strategic_ai.benchmarks import (NimProblem, ResourceAllocationProblem, RoutePlanningProblem,\n                                    encode_features, nim_action_values, nim_hybrid_action_values)
 from strategic_ai.general_neural import GeneralNeuralPolicy
 from strategic_ai.search import SearchTree, plan
 
@@ -58,6 +58,24 @@ class PuctAndActionValueTests(unittest.TestCase):
         visits = {row["first_action"]: row["visits"] for row in result["alternatives"]}
         self.assertGreater(visits["right"], visits["left"])
         self.assertEqual(result["selection"], "PUCT")
+
+    def test_hybrid_never_degrades_an_exactly_solvable_adversarial_game(self):
+        class UnreliableNeural:
+            def supports_features(self, features):
+                return True
+
+            def predict_features(self, features):
+                return [0.0] * 5
+
+        # The benchmark is finite take-away Nim. Exact minimax is available,
+        # so a learned leaf estimate is not allowed to overturn a proven move.
+        for stones in range(1, 37):
+            exact = nim_action_values(stones)
+            hybrid, _solved_positions = nim_hybrid_action_values(
+                stones, UnreliableNeural(), depth=5
+            )
+            self.assertEqual(hybrid, exact, f"pile={stones}")
+            self.assertIn(max(exact, key=exact.get), NimProblem(stones).actions(stones))
 
     def test_action_encoder_describes_state_action_pairs(self):
         resource = ResourceAllocationProblem(12)
