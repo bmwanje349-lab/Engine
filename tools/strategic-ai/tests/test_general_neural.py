@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from strategic_ai.benchmarks import ResourceAllocationProblem, NimProblem, encode_features
+from strategic_ai.action_encoding import RESOURCE_ACTIONS
 from strategic_ai.general_neural import GeneralNeuralPolicy
 
 
@@ -14,7 +15,7 @@ class GeneralNeuralDomainCoverageTests(unittest.TestCase):
             problem = ResourceAllocationProblem(seed)
             key = encode_features(problem.features(problem.initial_state()))
             targets[key] = {
-                "UP": 1.0, "RIGHT": 2.0, "DOWN": 0.0, "LEFT": -1.0, "REST": -0.5,
+                RESOURCE_ACTIONS[0]: 1.0, RESOURCE_ACTIONS[1]: 2.0, RESOURCE_ACTIONS[2]: 0.0,\n                RESOURCE_ACTIONS[3]: -1.0, RESOURCE_ACTIONS[4]: -0.5,
             }
             if len(targets) >= 60:
                 break
