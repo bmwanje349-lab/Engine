@@ -12,7 +12,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-from .action_encoding import ACTION_FEATURES, encode_action_features
+from .action_encoding import ACTION_FEATURES, actions_for_features, encode_action_features, legacy_action_index
 from .gridworld import ACTIONS
 
 INPUTS, HIDDEN1, HIDDEN2 = 32, 96, 64
@@ -164,10 +164,10 @@ class GeneralNeuralPolicy:
         return float(result)
 
     def predict_features(self, features) -> list[float]:
-        """Compatibility helper; production decisions use explicit state-action scoring."""
+        """Score this domain's five semantic action candidates (compatibility helper)."""
         return [
             self.predict_action_value(features, encode_action_features(features, action), action_name=action)
-            for action in ACTIONS
+            for action in actions_for_features(features)
         ]
 
     def save(self, path: str | Path) -> None:
@@ -234,8 +234,9 @@ class GeneralNeuralPolicy:
             except (TypeError, ValueError):
                 continue
             values = {}
+            valid_actions = actions_for_features(features)
             for action, raw_value in action_values.items():
-                if action not in ACTIONS:
+                if action not in valid_actions:
                     continue
                 if isinstance(raw_value, dict):
                     raw_value = raw_value.get("value")
@@ -429,9 +430,9 @@ class LegacyGeneralNeuralPolicy:
 
     def predict_action_value(self, features, action_features, *, action_name=None):
         action = action_name or (action_features if isinstance(action_features, str) else None)
-        if action not in ACTIONS:
-            action = ACTIONS[0]
-        return float(self.predict_features(features)[ACTIONS.index(action)])
+        if action is None:
+            action = actions_for_features(features)[0]
+        return float(self.predict_features(features)[legacy_action_index(features, action)])
 
     def predict_value_features(self, features):
         return max(self.predict_features(features))
