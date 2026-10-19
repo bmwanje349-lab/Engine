@@ -3,7 +3,7 @@ import unittest
 
 from strategic_ai.action_encoding import encode_action_features
 from strategic_ai.benchmarks import NimProblem, ResourceAllocationProblem, RoutePlanningProblem, encode_features, nim_action_values, nim_hybrid_action_values
-from strategic_ai.general_neural import GeneralNeuralPolicy
+from strategic_ai.general_neural import GeneralNeuralPolicy, normalized_action_prior
 from strategic_ai.search import SearchTree, plan
 
 
@@ -45,6 +45,13 @@ class PuctAndActionValueTests(unittest.TestCase):
         tree.advance(problem, "left", "X")
         self.assertIs(tree.root, child)
         self.assertLessEqual(len(tree.nodes), 1000)
+
+    def test_normalized_neural_priors_keep_action_order_without_scale_dominance(self):
+        scores = {"A": 1000.0, "B": 999.0, "C": -500.0}
+        self.assertGreater(normalized_action_prior(scores, "A"),
+                           normalized_action_prior(scores, "B"))
+        self.assertLessEqual(abs(normalized_action_prior(scores, "A")), 2.0)
+        self.assertEqual(normalized_action_prior({"A": 7.0, "B": 7.0}, "A"), 0.0)
 
     def test_puct_uses_net_priors_and_state_value_leaf_evaluator(self):
         problem = TinyGraph(transposed=False)
