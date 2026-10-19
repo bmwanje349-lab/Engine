@@ -27,7 +27,10 @@ def _prior(problem, state, action, neural):
     actions = list(problem.actions(state))
     if not actions:
         return 0.0
-    values = _neural_values(problem, state, neural)
+    features = problem.features(state)
+    if hasattr(neural, "supports_features") and not neural.supports_features(features):
+        return 0.0
+    values = neural.predict_features(features)
     legal_values = [float(values[ACTIONS.index(a)]) for a in actions]
     center = sum(legal_values) / len(legal_values)
     return max(-1.0, min(1.0, (float(values[ACTIONS.index(action)]) - center) / 1.5))
@@ -130,8 +133,12 @@ def _episode(problem, family, method, neural, seed, simulations, horizon):
         elif method == "neural":
             action = _choose_neural(problem, state, neural)
         else:
-            prior = (None if method == "search" else
-                     lambda s, a: _prior(problem, s, a, neural))
+            prior = None
+            if method != "search":
+                features = problem.features(state)
+                # Do not let out-of-domain neural estimates steer a search.
+                if not hasattr(neural, "supports_features") or neural.supports_features(features):
+                    prior = lambda s, a: _prior(problem, s, a, neural)
             result = plan(
                 problem, state, simulations=simulations, horizon=horizon,
                 seed=seed + steps * 17, top_k=5,
