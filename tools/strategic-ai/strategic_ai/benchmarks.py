@@ -9,6 +9,7 @@ from functools import lru_cache
 import random
 from typing import Any
 
+from .action_encoding import NIM_ACTIONS, RESOURCE_ACTIONS, SCHEDULING_ACTIONS
 from .gridworld import ACTIONS, DELTAS
 
 
@@ -47,10 +48,10 @@ class ResourceAllocationProblem:
             return ()
         allocated, decisions = state
         remaining = self.budget - sum(allocated)
-        choices = [ACTIONS[i] for i in range(4)
+        choices = [RESOURCE_ACTIONS[i] for i in range(4)
                    if allocated[i] < self.demands[i] and remaining > 0]
         if decisions < self.max_decisions - 1:
-            choices.append("REST")
+            choices.append(RESOURCE_ACTIONS[4])
         return tuple(choices)
 
     def step(self, state, action, rng):
@@ -60,10 +61,10 @@ class ResourceAllocationProblem:
         allocated, decisions = state
         allocated = list(allocated)
         reward = -0.12
-        if action == "REST":
+        if action == RESOURCE_ACTIONS[4]:
             reward -= 0.35
         else:
-            i = ACTIONS.index(action)
+            i = RESOURCE_ACTIONS.index(action)
             reward += self.values[i] * (1.0 - 0.18 * allocated[i]) - 0.10
             allocated[i] += 1
             if allocated[i] == self.demands[i]:
@@ -138,7 +139,7 @@ class SchedulingProblem:
         if self.terminal(state):
             return ()
         mask, clock, wait_used, _decisions, _late_mask = state
-        choices = [ACTIONS[i] for i in self._ready(mask)]
+        choices = [SCHEDULING_ACTIONS[i] for i in self._ready(mask)]
         if not wait_used and clock < self.max_time - 1:
             choices.append("REST")
         return tuple(choices)
@@ -152,12 +153,12 @@ class SchedulingProblem:
         completed = mask
         new_clock = clock
         new_wait_used = wait_used
-        if action == "REST":
+        if action == SCHEDULING_ACTIONS[4]:
             new_clock += 1
             new_wait_used = True
             reward -= 0.65
         else:
-            i = ACTIONS.index(action)
+            i = SCHEDULING_ACTIONS.index(action)
             duration = self.durations[i]
             new_clock += duration
             lateness = max(0, new_clock - self.deadlines[i])
@@ -333,13 +334,13 @@ class NimProblem:
         return int(state) <= 0
 
     def actions(self, state):
-        return tuple(ACTIONS[i] for i in range(min(5, int(state))))
+        return tuple(NIM_ACTIONS[i] for i in range(min(5, int(state))))
 
     def step(self, state, action, rng):
         del rng
         if action not in self.actions(state):
             return state, -1.0, self.terminal(state), {"invalid_action": True}
-        take = ACTIONS.index(action) + 1
+        take = NIM_ACTIONS.index(action) + 1
         nxt = int(state) - take
         return nxt, (1.0 if nxt == 0 else 0.0), nxt <= 0, {"stones_taken": take}
 
@@ -372,19 +373,8 @@ def nim_value(stones: int) -> float:
 def nim_action_values(stones: int) -> dict[str, float]:
     """Strong-search action targets (optimal returns from the current player's view)."""
     problem = NimProblem(stones)
-    return {action: -nim_value(stones - (ACTIONS.index(action) + 1))
+    return {action: -nim_value(stones - (NIM_ACTIONS.index(action) + 1))
             for action in problem.actions(stones)}
-
-
-def _bounded_neural_value(stones: int, neural) -> float:
-    if stones <= 0:
-        return -1.0
-    features = NimProblem(stones).features(stones)
-    outputs = neural.predict_features(features)
-    legal = NimProblem(stones).actions(stones)
-    if not legal:
-        return -1.0
-    return max(-1.0, min(1.0, max(float(outputs[ACTIONS.index(a)]) for a in legal)))
 
 
 def nim_hybrid_action_values(stones: int, neural, *, depth: int = 5) -> tuple[dict[str, float], int]:
