@@ -45,6 +45,29 @@ class BenchmarkFamilyTests(unittest.TestCase):
         self.assertTrue(set(route.actions(route.initial_state())).issubset(set(ACTIONS)))
         self.assertEqual(nim.actions(nim.initial_state()), NIM_ACTIONS)
 
+    def test_harder_difficulty_levels_preserve_valid_state_and_action_schemas(self):
+        for family in ("resource_allocation", "scheduling", "route_planning"):
+            with self.subTest(family=family):
+                base = make_problem(family, 123, difficulty=0)
+                medium = make_problem(family, 123, difficulty=1)
+                hard = make_problem(family, 123, difficulty=2)
+                for problem in (base, medium, hard):
+                    features = problem.features(problem.initial_state())
+                    self.assertEqual(len(features), 32)
+                    self.assertTrue(all(-1.0 <= float(value) <= 1.0 for value in features))
+                    self.assertTrue(problem.actions(problem.initial_state()))
+        base_route = make_problem("route_planning", 123, difficulty=0)
+        hard_route = make_problem("route_planning", 123, difficulty=2)
+        self.assertEqual((base_route.width, base_route.height), (5, 5))
+        self.assertEqual((hard_route.width, hard_route.height), (9, 9))
+        self.assertGreater(hard_route.max_steps, base_route.max_steps)
+        base_resource = make_problem("resource_allocation", 123, difficulty=0)
+        hard_resource = make_problem("resource_allocation", 123, difficulty=2)
+        self.assertGreaterEqual(max(hard_resource.demands), max(base_resource.demands))
+        base_schedule = make_problem("scheduling", 123, difficulty=0)
+        hard_schedule = make_problem("scheduling", 123, difficulty=2)
+        self.assertLess(max(hard_schedule.deadlines), max(base_schedule.deadlines))
+
     def test_single_agent_search_works_on_all_planning_families(self):
         for family in FAMILIES[:3]:
             with self.subTest(family=family):
