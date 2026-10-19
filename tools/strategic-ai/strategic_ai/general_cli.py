@@ -59,7 +59,10 @@ def main():
             prior = None
             if args.mode == "hybrid":
                 def prior(s, a):
-                    values = neural.predict_features(problem.features(s))
+                    features = problem.features(s)
+                    if hasattr(neural, "supports_features") and not neural.supports_features(features):
+                        return 0.0
+                    values = neural.predict_features(features)
                     legal_values = [values[ACTIONS.index(item)] for item in problem.actions(s)]
                     center = sum(legal_values) / max(1, len(legal_values))
                     return max(-1.0, min(1.0, (values[ACTIONS.index(a)] - center) / 5.0))
