@@ -482,7 +482,7 @@ def main():
         family: scores["paired_comparisons"]["neural_minus_random"]
         for family, scores in heldout.items()
     }
-    neural_baseline_pass = all(row["mean_delta"] >= 0.0 for row in neural_vs_random_ci.values())
+    neural_baseline_pass = all(row["ci95_lower"] >= 0.0 for row in neural_vs_random_ci.values())
     search_lcb_pass = all(row["ci95_lower"] >= -0.5 for row in hybrid_vs_search.values())
     fold_lcb = min(row["hybrid_minus_search_ci95_lower"] for row in folds)
     fold_lcb_pass = fold_lcb >= -0.5
