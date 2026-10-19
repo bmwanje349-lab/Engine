@@ -111,7 +111,7 @@ class SchedulingProblem:
 
     family = "scheduling"
     domain_id = 1
-    max_time = 11
+    max_time = 16
 
     def __init__(self, seed: int, *, difficulty: int = 0):
         if difficulty not in (0, 1, 2):
@@ -119,21 +119,20 @@ class SchedulingProblem:
         rng = random.Random(seed)
         self.durations = tuple(1 + rng.randrange(3) for _ in range(4))
         self.priorities = tuple(1 + rng.randrange(4) for _ in range(4))
-        if difficulty == 0:
-            self.deadlines = (
-                3 + rng.randrange(2), 5 + rng.randrange(2),
-                5 + rng.randrange(2), 9 + rng.randrange(2),
-            )
-        elif difficulty == 1:
-            self.deadlines = (
-                2 + rng.randrange(2), 4 + rng.randrange(2),
-                4 + rng.randrange(2), 7 + rng.randrange(3),
-            )
-        else:
-            self.deadlines = (
-                1 + rng.randrange(2), 3 + rng.randrange(2),
-                3 + rng.randrange(2), 5 + rng.randrange(3),
-            )
+        # Deadlines are derived from a known feasible serial schedule, then
+        # tightened as difficulty rises. This keeps hard cases difficult but
+        # avoids scoring an agent against randomly impossible due dates.
+        canonical_finish = (
+            self.durations[0],
+            sum(self.durations[:2]),
+            sum(self.durations[:3]),
+            sum(self.durations),
+        )
+        slack_bounds = ((2, 4), (1, 2), (0, 1))[difficulty]
+        self.deadlines = tuple(
+            canonical_finish[index] + rng.randint(*slack_bounds)
+            for index in range(4)
+        )
         self.dependencies = (0, 1, 1, (1 << 1) | (1 << 2))
 
     def initial_state(self):
