@@ -93,6 +93,23 @@ class BenchmarkFamilyTests(unittest.TestCase):
                 break
         self.assertTrue(problem.terminal(state))
 
+    def test_every_difficulty_has_a_known_feasible_schedule(self):
+        for difficulty in (0, 1, 2):
+            for seed in range(20):
+                with self.subTest(difficulty=difficulty, seed=seed):
+                    problem = SchedulingProblem(seed, difficulty=difficulty)
+                    state = problem.initial_state()
+                    rng = random.Random(seed)
+                    final_info = {}
+                    done = False
+                    for action in SCHEDULING_ACTIONS[:4]:
+                        self.assertIn(action, problem.actions(state))
+                        state, _reward, done, final_info = problem.step(state, action, rng)
+                    self.assertTrue(done)
+                    self.assertEqual(state[0], 0b1111)
+                    self.assertEqual(state[4], 0, "the canonical schedule must meet all deadlines")
+                    self.assertLessEqual(state[1], problem.max_time)
+                    self.assertTrue(final_info["success"])
     def test_schedule_dependency_rules_are_enforced(self):
         problem = SchedulingProblem(19)
         state = problem.initial_state()
