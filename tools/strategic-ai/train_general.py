@@ -81,8 +81,11 @@ def collect_search_targets(seed: int, target_simulations: int, target_horizon: i
     for family_index, family in enumerate(FAMILIES[:3]):
         for scenario in range(scenarios_per_family):
             problem_seed = seed + family_index * 100000 + scenario * 97 + iteration * 1000003
-            scenario_id = f"iter{iteration}:{family}:{problem_seed}"
-            problem = make_problem(family, problem_seed)
+            difficulty = 1 if scenario % 4 == 0 else 0
+            scenario_id = f"iter{iteration}:{family}:difficulty{difficulty}:{problem_seed}"
+            # Train on base and medium difficulty; reserve difficulty 2 for
+            # a genuinely harder, separate promotion-time stress evaluation.
+            problem = make_problem(family, problem_seed, difficulty=difficulty)
             state = problem.initial_state()
             rng = random.Random(problem_seed + 9001)
             tree = SearchTree()
@@ -320,7 +323,8 @@ def evaluate_nim_positions(neural, stones_values=range(61, 101), seed=719, retur
     return result
 
 
-def evaluate_family(family, neural, *, seed, episodes, simulations, horizon, return_rows=False):
+def evaluate_family(family, neural, *, seed, episodes, simulations, horizon,
+                    return_rows=False, difficulty=0):
     if family == "adversarial":
         return evaluate_nim_positions(neural, seed=seed, return_rows=return_rows)
     methods = ("random", "search", "neural", "hybrid")
@@ -331,7 +335,7 @@ def evaluate_family(family, neural, *, seed, episodes, simulations, horizon, ret
         for episode in range(episodes):
             # Identical scenario seeds and episode RNG seeds pair each policy's result.
             problem_seed = seed + family_offset + episode * 31
-            problem = make_problem(family, problem_seed)
+            problem = make_problem(family, problem_seed, difficulty=difficulty)
             rows.append(_episode(
                 problem, family, method, neural, problem_seed + 50000, simulations, horizon
             ))
@@ -456,6 +460,16 @@ def main():
             episodes=args.episodes_per_family, simulations=args.eval_simulations,
             horizon=args.eval_horizon, return_rows=True)
 
+    # Difficulty-2 stress set: shifted deadline distributions, higher project
+    # demands, and 9x9 weighted/hazardous routes. These are not used as the
+    # primary training targets and are evaluated on independent seeds.
+    stress_heldout = {}
+    for family in FAMILIES[:3]:
+        stress_heldout[family] = evaluate_family(
+            family, neural, seed=args.seed + 900000,
+            episodes=args.episodes_per_family, simulations=args.eval_simulations,
+            horizon=max(args.eval_horizon, 16), difficulty=2)
+
     folds = leave_one_family_out(
         targets, seed=args.seed, epochs=args.fold_epochs,
         eval_episodes=args.fold_eval_episodes,
@@ -469,10 +483,30 @@ def main():
         family: scores["paired_comparisons"]["neural_minus_random"]
         for family, scores in heldout.items()
     }
-    neural_baseline_pass = all(row["mean_delta"] >= 0.0 for row in neural_vs_random_ci.values())
+    # A positive point estimate alone is not enough for promotion: require
+    # the lower 95% paired confidence bound to be non-negative on every family.
+    neural_baseline_pass = all(row["ci95_lower"] >= 0.0 for row in neural_vs_random_ci.values())
     search_lcb_pass = all(row["ci95_lower"] >= -0.5 for row in hybrid_vs_search.values())
     fold_lcb = min(row["hybrid_minus_search_ci95_lower"] for row in folds)
     fold_lcb_pass = fold_lcb >= -0.5
+    stress_hybrid_vs_search = {
+        family: scores["paired_comparisons"]["hybrid_minus_search"]
+        for family, scores in stress_heldout.items()
+    }
+    stress_neural_vs_random = {
+        family: scores["paired_comparisons"]["neural_minus_random"]
+        for family, scores in stress_heldout.items()
+    }
+    stress_neural_pass = all(row["ci95_lower"] >= 0.0
+                             for row in stress_neural_vs_random.values())
+    stress_search_lcb_pass = all(row["ci95_lower"] >= -1.0
+                                 for row in stress_hybrid_vs_search.values())
+    stress_metrics_finite = all(
+        math.isfinite(float(scores[method]["mean_return"]))
+        and 0.0 <= float(scores[method]["success_rate"]) <= 1.0
+        for scores in stress_heldout.values()
+        for method in METHODS
+    )
 
     champion_comparison = {"available": False, "compatible": False, "families": {}, "pass": True}
     if args.champion and Path(args.champion).is_file():
@@ -529,6 +563,11 @@ def main():
             "safe-fallback gate checks hybrid non-regression when the held-out family is unseen; "
             "neural-only versus random is reported separately as a zero-shot transfer diagnostic"
         ),
+        "stress_neural_only_vs_random_paired_deltas": stress_neural_vs_random,
+        "stress_hybrid_vs_search_paired_deltas": stress_hybrid_vs_search,
+        "stress_neural_lower_confidence_bound_beats_random_on_every_family": stress_neural_pass,
+        "stress_hybrid_lower_confidence_bound_beats_search_margin": stress_search_lcb_pass,
+        "stress_metrics_finite": stress_metrics_finite,
         "champion_comparison": champion_comparison,
         "all_metrics_finite": metrics_are_finite,
         "promote_candidate": bool(
@@ -537,6 +576,9 @@ def main():
             and neural_baseline_pass
             and search_lcb_pass
             and fold_lcb_pass
+            and stress_neural_pass
+            and stress_search_lcb_pass
+            and stress_metrics_finite
             and champion_comparison["pass"]
             and metrics_are_finite
         ),
@@ -553,6 +595,11 @@ def main():
             "validation_protocol": "scenario-grouped disjoint split; no scenario may cross train/validation",
         },
         "held_out_scenarios": heldout,
+        "stress_held_out_scenarios": stress_heldout,
+        "stress_protocol": (
+            "Difficulty-2 resource-demand, tight-deadline scheduling and 9x9 hazardous-routing tasks; "
+            "training uses difficulty-0/1 mixed scenarios, stress seeds are separate"
+        ),
         "leave_one_family_out": folds,
         "acceptance": acceptance,
         "checkpoint": {"path": str(neural_path), "bytes": neural_path.stat().st_size},
