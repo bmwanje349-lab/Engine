@@ -1,4 +1,4 @@
-# Strategic Reasoning AI (experimental v4)
+# Strategic Reasoning AI (experimental v5)
 
 A research prototype inside the Engine repository, separate from WiFiFix AI. It explores alternatives, compares future outcomes, and promotes a checkpoint only when explicit held-out quality and regression gates pass. It is not a claim of superintelligence or real-world reliability.
 
