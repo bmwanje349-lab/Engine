@@ -91,7 +91,7 @@ class PuctAndActionValueTests(unittest.TestCase):
         route_features = route.features(route.initial_state())
         self.assertEqual(len(encode_action_features(resource_features, RESOURCE_ACTIONS[0])), 8)
         self.assertNotEqual(
-            encode_action_features(resource_features, "UP"),
+            encode_action_features(resource_features, RESOURCE_ACTIONS[0]),
             encode_action_features(resource_features, RESOURCE_ACTIONS[1]),
         )
         self.assertNotEqual(
