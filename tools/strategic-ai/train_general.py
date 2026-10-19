@@ -205,6 +205,30 @@ def _episode(problem, family, method, neural, seed, simulations, horizon):
     return {"return": total, "success": success, "steps": steps, "search_visits": visits}
 
 
+def _t_critical_95(degrees_of_freedom: int) -> float:
+    """Two-sided 95% Student-t critical value for small/medium samples."""
+    table = (
+        0.0, 12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365,
+        2.306, 2.262, 2.228, 2.201, 2.179, 2.160, 2.145, 2.131,
+        2.120, 2.110, 2.101, 2.093, 2.086, 2.080, 2.074, 2.069,
+        2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042,
+    )
+    if degrees_of_freedom <= 0:
+        return float("inf")
+    if degrees_of_freedom < len(table):
+        return table[degrees_of_freedom]
+    # Cornish-Fisher expansion for t quantiles above 30 degrees of freedom.
+    z = 1.959963984540054
+    v = float(degrees_of_freedom)
+    z2 = z * z
+    return (
+        z
+        + (z**3 + z) / (4.0 * v)
+        + (5.0 * z**5 + 16.0 * z**3 + 3.0 * z) / (96.0 * v**2)
+        + (3.0 * z**7 + 19.0 * z**5 + 17.0 * z**3 - 15.0 * z) / (384.0 * v**3)
+    )
+
+
 def _ci95(values):
     values = [float(v) for v in values if math.isfinite(float(v))]
     if not values:
@@ -213,9 +237,9 @@ def _ci95(values):
     if len(values) < 2:
         margin = 0.0
     else:
-        # Evaluation uses >=40 independent held-out positions/episodes; 1.96
-        # is a conservative large-sample 95% confidence multiplier.
-        margin = 1.96 * statistics.stdev(values) / math.sqrt(len(values))
+        # Paired differences share this interval estimator, which accounts for
+        # finite sample sizes instead of using 1.96 as if sigma were known.
+        margin = _t_critical_95(len(values) - 1) * statistics.stdev(values) / math.sqrt(len(values))
     return {
         "mean": round(mean, 5),
         "lower": round(mean - margin, 5),
