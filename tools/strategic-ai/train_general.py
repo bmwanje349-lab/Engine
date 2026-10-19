@@ -127,39 +127,66 @@ def collect_search_targets(seed: int, target_simulations: int, target_horizon: i
             for step_index in range(states_per_scenario):
                 if problem.terminal(state):
                     break
-                prior = None
-                value_evaluator = None
-                if guide is not None:
-                    features = problem.features(state)
-                    if not hasattr(guide, "supports_features") or guide.supports_features(features):
-                        prior = lambda s, a, p=problem: _prior(p, s, a, guide)
-                        value_evaluator = lambda s, p=problem: _leaf_value(p, s, guide)
-                result = plan(
-                    problem, state, simulations=target_simulations, horizon=target_horizon,
-                    seed=problem_seed + step_index * 13, top_k=5,
-                    action_prior=prior, prior_weight=(0.75 if prior is not None else 0.0),
-                    value_evaluator=value_evaluator, root_noise=(0.20 if guide is not None else 0.0),
-                    tree=tree,
-                )
-                key = _target_key(scenario_id, problem.features(state))
-                row = targets.setdefault(key, {})
-                for alternative in result["alternatives"]:
-                    action = alternative["first_action"]
-                    score = float(alternative["estimated_return"])
-                    if math.isfinite(score):
-                        row[action] = score
-                target_actions += len(result["alternatives"])
-                visited_states += 1
                 legal = list(problem.actions(state))
                 if not legal:
                     break
-                best_action = result["best_action"]
-                # Expert iteration follows search most of the time but keeps
-                # off-policy paths for broader state coverage.
-                action = (best_action if best_action is not None and rng.random() < 0.75
-                          else rng.choice(legal))
+
+                key = _target_key(scenario_id, problem.features(state))
+                row = targets.setdefault(key, {})
+                if family in ("resource_allocation", "scheduling"):
+                    # These environments are finite and deterministic. Use an
+                    # exact Bellman teacher for every legal action rather than
+                    # noisy rollout estimates from a shallow search.
+                    expert_values = exact_action_values(problem, state)
+                    row.update(expert_values)
+                    best_action = max(legal, key=lambda action: (expert_values[action], -legal.index(action)))
+                    target_actions += len(expert_values)
+                    visited_states += 1
+
+                    # Expert iteration broadens state coverage with a little
+                    # policy-guided and random behavior, while labels remain exact.
+                    action_draw = rng.random()
+                    features = problem.features(state)
+                    guide_available = (
+                        guide is not None
+                        and (not hasattr(guide, "supports_features") or guide.supports_features(features))
+                    )
+                    if guide_available and action_draw < 0.20:
+                        guide_values = _neural_values(problem, state, guide)
+                        action = max(legal, key=lambda item: (guide_values[item], -legal.index(item)))
+                    elif action_draw < 0.85:
+                        action = best_action
+                    else:
+                        action = rng.choice(legal)
+                else:
+                    prior = None
+                    value_evaluator = None
+                    if guide is not None:
+                        features = problem.features(state)
+                        if not hasattr(guide, "supports_features") or guide.supports_features(features):
+                            prior = lambda s, a, p=problem: _prior(p, s, a, guide)
+                            value_evaluator = lambda s, p=problem: _leaf_value(p, s, guide)
+                    result = plan(
+                        problem, state, simulations=target_simulations, horizon=target_horizon,
+                        seed=problem_seed + step_index * 13, top_k=5,
+                        action_prior=prior, prior_weight=(0.75 if prior is not None else 0.0),
+                        value_evaluator=value_evaluator, root_noise=(0.20 if guide is not None else 0.0),
+                        tree=tree,
+                    )
+                    for alternative in result["alternatives"]:
+                        action_name = alternative["first_action"]
+                        score = float(alternative["estimated_return"])
+                        if math.isfinite(score):
+                            row[action_name] = score
+                    target_actions += len(result["alternatives"])
+                    visited_states += 1
+                    best_action = result["best_action"]
+                    action = (best_action if best_action is not None and rng.random() < 0.75
+                              else rng.choice(legal))
+
                 next_state, _reward, done, _info = problem.step(state, action, rng)
-                tree.advance(problem, action, next_state)
+                if family not in ("resource_allocation", "scheduling"):
+                    tree.advance(problem, action, next_state)
                 state = next_state
                 if done:
                     break
