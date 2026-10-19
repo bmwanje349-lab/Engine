@@ -375,10 +375,19 @@ class GeneralNeuralPolicy:
             h2 = np.maximum(z2, 0)
             return h2, (x, z1, h1, z2)
 
-        def loss(x, y, head):
+        def loss_by_domain(x, y, domains, head):
             h2, _ = forward(x)
             prediction = h2 @ params["W" + head] + params["b" + head]
-            return float(np.mean((prediction - y) ** 2))
+            losses = {}
+            for domain_id, domain_name in enumerate(domain_names):
+                mask = domains == domain_id
+                if np.any(mask):
+                    losses[domain_name] = float(np.mean((prediction[mask] - y[mask]) ** 2))
+            return losses
+
+        def loss(x, y, domains, head):
+            losses = loss_by_domain(x, y, domains, head)
+            return float(np.mean(list(losses.values()))) if losses else float("inf")
 
         def train_batch(x, y, head):
             nonlocal step
@@ -405,8 +414,10 @@ class GeneralNeuralPolicy:
                 vhat = second[name] / (1.0 - 0.999 ** step)
                 params[name] -= learning_rate * mhat / (np.sqrt(vhat) + 1e-8)
 
-        initial_q_loss = loss(Xqv, Yqv, "q")
-        initial_v_loss = loss(Xvv, Yvv, "v")
+        initial_q_loss = loss(Xqv, Yqv, Dqv, "q")
+        initial_v_loss = loss(Xvv, Yvv, Dvv, "v")
+        initial_q_domain_losses = loss_by_domain(Xqv, Yqv, Dqv, "q")
+        initial_v_domain_losses = loss_by_domain(Xvv, Yvv, Dvv, "v")
         initial_loss = 0.5 * (initial_q_loss + initial_v_loss)
         best_loss = initial_loss
         best_q_loss, best_v_loss = initial_q_loss, initial_v_loss
@@ -418,13 +429,15 @@ class GeneralNeuralPolicy:
                 for start in range(0, len(order), batch_size):
                     indices = order[start:start + batch_size]
                     train_batch(x[indices], y[indices], head)
-            q_loss, v_loss = loss(Xqv, Yqv, "q"), loss(Xvv, Yvv, "v")
+            q_loss, v_loss = loss(Xqv, Yqv, Dqv, "q"), loss(Xvv, Yvv, Dvv, "v")
             candidate_loss = 0.5 * (q_loss + v_loss)
             if math.isfinite(candidate_loss) and candidate_loss < best_loss:
                 best_loss, best_q_loss, best_v_loss = candidate_loss, q_loss, v_loss
                 best_epoch = epoch + 1
                 best = {name: value.copy() for name, value in params.items()}
         params = best
+        final_q_domain_losses = loss_by_domain(Xqv, Yqv, Dqv, "q")
+        final_v_domain_losses = loss_by_domain(Xvv, Yvv, Dvv, "v")
         if not all(np.isfinite(array).all() for array in params.values()):
             raise ValueError("general neural training produced non-finite parameters")
         trained_domains = sorted({
@@ -454,7 +467,22 @@ class GeneralNeuralPolicy:
             "final_value_validation_mse": round(best_v_loss, 6),
             "validation_mse_improved": bool(best_loss < initial_loss),
             "best_epoch": best_epoch, "epochs": epochs,
-            "target_scaling": "global train-scenario standardization; inverse-scaled at inference",
+            "target_scaling": "per-domain train-scenario standardization; inverse-scaled at inference",
+            "balanced_domain_training": True,
+            "domain_training_counts": {
+                domain_name: sum(1 for row in train_rows if row_domain(row) == domain_id)
+                for domain_id, domain_name in enumerate(domain_names)
+            },
+            "validation_mse_by_domain": {
+                domain_name: {
+                    "initial_q": initial_q_domain_losses.get(domain_name),
+                    "final_q": final_q_domain_losses.get(domain_name),
+                    "initial_value": initial_v_domain_losses.get(domain_name),
+                    "final_value": final_v_domain_losses.get(domain_name),
+                }
+                for domain_name in domain_names
+                if domain_name in initial_q_domain_losses or domain_name in initial_v_domain_losses
+            },
             "target_semantics": "action-conditioned Q(s,a) plus state-value V(s)",
             "trained_domains": trained_domains,
         }
