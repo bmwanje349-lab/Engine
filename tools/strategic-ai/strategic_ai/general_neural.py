@@ -17,7 +17,8 @@ from .gridworld import ACTIONS
 
 INPUTS, HIDDEN1, HIDDEN2 = 32, 96, 64
 NETWORK_INPUTS = INPUTS + ACTION_FEATURES
-FORMAT = "strategic-ai-general-neural-v4-puct"
+FORMAT = "strategic-ai-general-neural-v5-balanced-domains"
+V4_FORMAT = "strategic-ai-general-neural-v4-puct"
 def normalized_action_prior(action_values, action, *, limit: float = 2.0) -> float:
     """Convert return-scale Q estimates into bounded, relative PUCT prior logits.
 
@@ -40,6 +41,26 @@ def normalized_action_prior(action_values, action, *, limit: float = 2.0) -> flo
     return max(-limit, min(limit, score))
 
 LEGACY_FORMAT = "strategic-ai-general-neural-v3"
+
+
+def _domain_index(features) -> int:
+    values = _features(features)
+    domain = values[16:20]
+    if abs(sum(domain) - 1.0) > 1e-5 or max(domain) < 0.5:
+        raise ValueError("state features must identify exactly one supported domain")
+    return max(range(4), key=lambda index: domain[index])
+
+
+def _four_scalars(value, name: str) -> tuple[float, float, float, float]:
+    if isinstance(value, (int, float)):
+        values = [float(value)] * 4
+    elif isinstance(value, (tuple, list)) and len(value) == 4:
+        values = [float(item) for item in value]
+    else:
+        raise ValueError(f"{name} must be a scalar or a four-domain vector")
+    if not all(math.isfinite(item) for item in values):
+        raise ValueError(f"{name} must contain finite numbers")
+    return tuple(values)
 
 
 def _features(values):
@@ -90,10 +111,11 @@ class GeneralNeuralPolicy:
             raise ValueError("general neural checkpoint has invalid trained-domain metadata")
         self.W1, self.b1, self.W2, self.b2 = W1, b1, W2, b2
         self.Wq, self.bq, self.Wv, self.bv = Wq, bq, Wv, bv
-        self.q_mean, self.q_scale = float(q_mean), float(q_scale)
-        self.value_mean, self.value_scale = float(value_mean), float(value_scale)
-        if (not all(math.isfinite(v) for v in (self.q_mean, self.q_scale, self.value_mean, self.value_scale))
-                or self.q_scale <= 0 or self.value_scale <= 0):
+        self.q_mean = _four_scalars(q_mean, "q_mean")
+        self.q_scale = _four_scalars(q_scale, "q_scale")
+        self.value_mean = _four_scalars(value_mean, "value_mean")
+        self.value_scale = _four_scalars(value_scale, "value_scale")
+        if any(value <= 0 for value in self.q_scale + self.value_scale):
             raise ValueError("general neural checkpoint has invalid target scaling")
         if (len(W1) != NETWORK_INPUTS or len(b1) != HIDDEN1
                 or len(W2) != HIDDEN1 or len(b2) != HIDDEN2
@@ -149,7 +171,8 @@ class GeneralNeuralPolicy:
             action_features = encode_action_features(features, action_features)
         h2 = self._hidden(features, action_features)
         standardized = sum(h2[i] * self.Wq[i] for i in range(HIDDEN2)) + self.bq[0]
-        result = self.q_mean + self.q_scale * standardized
+        domain_id = _domain_index(features)
+        result = self.q_mean[domain_id] + self.q_scale[domain_id] * standardized
         if not math.isfinite(result):
             return 0.0
         return float(result)
@@ -158,7 +181,8 @@ class GeneralNeuralPolicy:
         """Estimate V(s) in return units; zero action features form the value-head input."""
         h2 = self._hidden(features, (0.0,) * ACTION_FEATURES)
         standardized = sum(h2[i] * self.Wv[i] for i in range(HIDDEN2)) + self.bv[0]
-        result = self.value_mean + self.value_scale * standardized
+        domain_id = _domain_index(features)
+        result = self.value_mean[domain_id] + self.value_scale[domain_id] * standardized
         if not math.isfinite(result):
             return 0.0
         return float(result)
@@ -200,7 +224,7 @@ class GeneralNeuralPolicy:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         if payload.get("format") == LEGACY_FORMAT:
             return LegacyGeneralNeuralPolicy(payload)
-        if (payload.get("format") != FORMAT or payload.get("inputs") != INPUTS
+        if (payload.get("format") not in (FORMAT, V4_FORMAT) or payload.get("inputs") != INPUTS
                 or payload.get("action_features") != ACTION_FEATURES
                 or payload.get("hidden") != [HIDDEN1, HIDDEN2]):
             raise ValueError("unsupported or incompatible general Strategic AI checkpoint")
