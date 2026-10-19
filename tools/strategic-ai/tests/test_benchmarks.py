@@ -6,7 +6,7 @@ from strategic_ai.benchmarks import (
     SchedulingProblem, make_problem, nim_action_values, nim_hybrid_action_values, nim_value,
 )
 from strategic_ai.gridworld import ACTIONS
-from strategic_ai.action_encoding import SCHEDULING_ACTIONS, NIM_ACTIONS
+from strategic_ai.action_encoding import RESOURCE_ACTIONS, SCHEDULING_ACTIONS, NIM_ACTIONS
 from strategic_ai.search import plan
 
 
@@ -31,6 +31,19 @@ class BenchmarkFamilyTests(unittest.TestCase):
             self.assertEqual(features[16 + domain_id], 1.0)
             self.assertEqual(sum(features[16:20]), 1.0)
             self.assertTrue(problem.actions(state))
+
+    def test_each_domain_exposes_semantically_distinct_actions(self):
+        resource = ResourceAllocationProblem(31)
+        schedule = SchedulingProblem(31)
+        route = RoutePlanningProblem(31)
+        nim = NimProblem(10)
+
+        self.assertEqual(resource.actions(resource.initial_state())[0], RESOURCE_ACTIONS[0])
+        self.assertNotIn("UP", resource.actions(resource.initial_state()))
+        self.assertEqual(schedule.actions(schedule.initial_state())[0], SCHEDULING_ACTIONS[0])
+        self.assertNotIn("UP", schedule.actions(schedule.initial_state()))
+        self.assertIn("UP", route.actions(route.initial_state()))
+        self.assertEqual(nim.actions(nim.initial_state()), NIM_ACTIONS)
 
     def test_single_agent_search_works_on_all_planning_families(self):
         for family in FAMILIES[:3]:
