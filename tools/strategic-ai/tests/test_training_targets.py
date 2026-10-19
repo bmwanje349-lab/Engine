@@ -5,6 +5,17 @@ from train_general import collect_search_targets
 
 
 class SearchGeneratedTrainingTargetTests(unittest.TestCase):
+    def test_training_mixes_base_and_medium_but_never_uses_hard_stress_difficulty(self):
+        targets, _report = collect_search_targets(
+            seed=29, target_simulations=8, target_horizon=4,
+            scenarios_per_family=4, states_per_scenario=2,
+        )
+        groups = {key.split("|", 1)[0] for key in targets}
+        planning_groups = [group for group in groups if group.startswith("iter0:") and not group.startswith("nim:")]
+        self.assertTrue(any(":difficulty0:" in group for group in planning_groups))
+        self.assertTrue(any(":difficulty1:" in group for group in planning_groups))
+        self.assertFalse(any(":difficulty2:" in group for group in planning_groups))
+
     def test_targets_cover_all_families_and_are_finite(self):
         targets, report = collect_search_targets(
             seed=19, target_simulations=8, target_horizon=4,
