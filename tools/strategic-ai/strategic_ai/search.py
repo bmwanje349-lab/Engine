@@ -257,7 +257,7 @@ def plan(problem: PlanningProblem, state: Any, *, simulations: int = 400,
             edge.value_sum += future
             parent.visits += 1
 
-    ranked = sorted(root.edges.items(), key=lambda item: (item[1].mean, item[1].visits), reverse=True)
+    ranked = sorted(root.edges.items(), key=lambda item: (item[1].visits, item[1].mean), reverse=True)
     alternatives = []
     for action, edge in ranked[:top_k]:
         cursor = root
