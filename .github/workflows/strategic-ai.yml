@@ -25,7 +25,7 @@ permissions:
 jobs:
   train-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       PYTHONHASHSEED: '0'
     defaults:
@@ -40,7 +40,7 @@ jobs:
           cache-dependency-path: tools/strategic-ai/requirements.txt
       - name: Install training dependency
         run: python -m pip install -r requirements.txt
-      - name: Test tree search and learning
+      - name: Test tree search, learning and benchmark families
         run: python -m unittest discover -s tests -v
       - name: Set bounded training budget
         id: cfg
@@ -53,7 +53,7 @@ jobs:
           [[ "$sim" =~ ^[0-9]+$ ]] && (( sim >= 8 && sim <= 5000 )) || { echo 'invalid simulations'; exit 2; }
           echo "episodes=$ep" >> "$GITHUB_OUTPUT"
           echo "simulations=$sim" >> "$GITHUB_OUTPUT"
-      - name: Train policy and evaluate on held-out scenarios
+      - name: Train grid policy and distill MCTS search targets
         run: |
           python train.py --episodes '${{ steps.cfg.outputs.episodes }}' --eval-episodes 20 --simulations '${{ steps.cfg.outputs.simulations }}' --horizon 18 --seed 410 --out artifacts/strategic_policy.json --metrics artifacts/metrics.json
           python - <<'PY'
@@ -64,20 +64,44 @@ jobs:
           assert Path('artifacts/strategic_policy.json').stat().st_size > 100
           assert Path('artifacts/strategic_neural.json').stat().st_size > 100
           assert m['neural_distillation']['parameters'] > 1000
+          assert m['neural_distillation']['search_target_states'] >= 20
           assert math.isfinite(m['neural_distillation']['final_validation_mse'])
           for section in ('held_out_random_policy','held_out_learned_policy','held_out_neural_policy','held_out_mcts_policy'):
               s=m[section]
               assert 0 <= s['success_rate'] <= 1
               assert math.isfinite(s['mean_return'])
-          print('Checkpoint integrity and held-out benchmark metrics passed.')
-          print('Benchmark scope:', m['validation_scope'])
+          print('Grid checkpoints and MCTS-generated neural targets passed integrity checks.')
+          PY
+      - name: Train cross-domain evaluator and validate held-out task families
+        run: |
+          python train_general.py --seed 410 --epochs 25 --fold-epochs 8 --episodes-per-family 3 --target-simulations 16 --eval-simulations 24 --target-horizon 8 --eval-horizon 8 --fold-eval-episodes 2 --out artifacts/strategic_general_neural.json --metrics artifacts/general_metrics.json
+          python - <<'PY'
+          import json, math
+          from pathlib import Path
+          model=Path('artifacts/strategic_general_neural.json')
+          m=json.loads(Path('artifacts/general_metrics.json').read_text())
+          assert model.stat().st_size > 1000
+          assert m['training']['target_generation']['unique_target_states'] >= 30
+          assert m['training']['neural_distillation']['validation_mse_improved']
+          assert len(m['leave_one_family_out']) == 4
+          assert m['acceptance']['all_metrics_finite']
+          assert m['acceptance']['promote_candidate'], 'held-out regression gate rejected candidate'
+          for family in ('resource_allocation','scheduling','route_planning','adversarial'):
+              metrics=m['held_out_scenarios'][family]
+              for method in ('search_only','neural_only','hybrid'):
+                  assert 0 <= metrics[method]['success_rate'] <= 1
+                  assert math.isfinite(metrics[method]['mean_return'])
+          print('Cross-domain checkpoint passed seeded and leave-one-family-out gates.')
+          print('Held-out scope:', m['validation_scope'])
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: strategic-ai-v1-${{ github.run_number }}
+          name: strategic-ai-v2-${{ github.run_number }}
           path: |
             tools/strategic-ai/artifacts/strategic_policy.json
             tools/strategic-ai/artifacts/strategic_neural.json
+            tools/strategic-ai/artifacts/strategic_general_neural.json
             tools/strategic-ai/artifacts/metrics.json
+            tools/strategic-ai/artifacts/general_metrics.json
           if-no-files-found: error
           retention-days: 30
