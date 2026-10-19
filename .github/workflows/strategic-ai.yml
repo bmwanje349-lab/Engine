@@ -55,6 +55,7 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref }}
           DISPATCH_EPISODES: ${{ github.event.inputs.episodes || '500' }}
           DISPATCH_SIMULATIONS: ${{ github.event.inputs.simulations || '96' }}
           DISPATCH_TARGET_SCENARIOS: ${{ github.event.inputs.target_scenarios || '480' }}
@@ -66,7 +67,21 @@ jobs:
           eval_ep="$DISPATCH_EVAL_EPISODES"
 
           case "$EVENT_NAME" in
-            push|pull_request)
+            push)
+              if [[ "$REF_NAME" == "refs/heads/main" ]]; then
+                # A merged Strategic AI change produces a full-budget, gated release run.
+                ep=350
+                sim=64
+                scenarios=480
+                eval_ep=80
+              else
+                ep=250
+                sim=48
+                scenarios=24
+                eval_ep=60
+              fi
+              ;;
+            pull_request)
               ep=250
               sim=48
               scenarios=24
@@ -329,7 +344,7 @@ jobs:
 
   publish-release:
     needs: [unit-tests, termux-cli, grid-train, train-candidate]
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
