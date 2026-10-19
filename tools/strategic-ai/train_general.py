@@ -163,7 +163,7 @@ def _episode(problem, family, method, neural, seed, simulations, horizon):
                 action = max(actions, key=lambda a: (values[a], -actions.index(a)))
             else:
                 values = nim_action_values(stones)
-                action = max(actions, key=lambda a: (values[a], -legal.index(a)))
+                action = max(actions, key=lambda a: (values[a], -actions.index(a)))
         elif method == "random":
             action = rng.choice(actions)
         elif method == "neural":
@@ -266,8 +266,8 @@ def evaluate_nim_positions(neural, stones_values=range(61, 101), seed=719, retur
         best = max(exact.values())
         predicted = _choose_neural(problem, stones, neural)
         hybrid_values, nodes = nim_hybrid_action_values(stones, neural, depth=5)
-        hybrid_action = max(legal, key=lambda a: (hybrid_values[a], -ACTIONS.index(a)))
-        search_action = max(legal, key=lambda a: (exact[a], -ACTIONS.index(a)))
+        hybrid_action = max(legal, key=lambda a: (hybrid_values[a], -legal.index(a)))
+        search_action = max(legal, key=lambda a: (exact[a], -legal.index(a)))
         random_action = rng.choice(legal)
         for name, action, count in (
             ("random", random_action, 0),
