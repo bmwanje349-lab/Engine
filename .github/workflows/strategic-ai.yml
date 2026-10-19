@@ -72,28 +72,76 @@ jobs:
               assert math.isfinite(s['mean_return'])
           print('Grid checkpoints and MCTS-generated neural targets passed integrity checks.')
           PY
-      - name: Train cross-domain evaluator and validate held-out task families
+      - name: Train independently seeded cross-domain candidates
         run: |
-          python train_general.py --seed 410 --epochs 45 --fold-epochs 20 --episodes-per-family 12 --target-simulations 32 --eval-simulations 48 --target-horizon 10 --eval-horizon 12 --fold-eval-episodes 8 --target-scenarios 24 --target-states 12 --train-nim-max 60 --out artifacts/strategic_general_neural.json --metrics artifacts/general_metrics.json
+          for seed in 410 777 2026; do
+            if [[ "$seed" == "410" ]]; then
+              model=artifacts/strategic_general_neural.json
+              metrics=artifacts/general_metrics.json
+            else
+              model="artifacts/strategic_general_neural_seed${seed}.json"
+              metrics="artifacts/general_metrics_seed${seed}.json"
+            fi
+            echo "Training and evaluating seed $seed"
+            python train_general.py --seed "$seed" --epochs 45 --fold-epochs 20 --episodes-per-family 20 --target-simulations 32 --eval-simulations 48 --target-horizon 10 --eval-horizon 12 --fold-eval-episodes 8 --target-scenarios 24 --target-states 12 --train-nim-max 60 --out "$model" --metrics "$metrics"
+          done
           python - <<'PY'
           import json, math
           from pathlib import Path
-          model=Path('artifacts/strategic_general_neural.json')
-          m=json.loads(Path('artifacts/general_metrics.json').read_text())
-          assert model.stat().st_size > 1000
-          assert m['training']['target_generation']['unique_target_states'] >= 30
-          assert m['training']['neural_distillation']['validation_mse_improved']
-          assert len(m['leave_one_family_out']) == 4
-          assert m['acceptance']['all_metrics_finite']
-          assert m['acceptance']['neural_only_beats_or_matches_baseline_on_every_family']
-          assert m['acceptance']['promote_candidate'], 'held-out regression gate rejected candidate'
-          for family in ('resource_allocation','scheduling','route_planning','adversarial'):
-              metrics=m['held_out_scenarios'][family]
-              for method in ('search_only','neural_only','hybrid'):
-                  assert 0 <= metrics[method]['success_rate'] <= 1
-                  assert math.isfinite(metrics[method]['mean_return'])
-          print('Cross-domain checkpoint passed seeded and leave-one-family-out gates.')
-          print('Held-out scope:', m['validation_scope'])
+          seeds=(410,777,2026)
+          families=('resource_allocation','scheduling','route_planning','adversarial')
+          summaries={}
+          for seed in seeds:
+              model=Path('artifacts/strategic_general_neural.json' if seed==410 else f'artifacts/strategic_general_neural_seed{seed}.json')
+              metrics=Path('artifacts/general_metrics.json' if seed==410 else f'artifacts/general_metrics_seed{seed}.json')
+              assert model.stat().st_size > 1000, f'seed {seed}: checkpoint too small'
+              m=json.loads(metrics.read_text())
+              assert m['training']['target_generation']['unique_target_states'] >= 100, f'seed {seed}: insufficient training coverage'
+              assert m['training']['neural_distillation']['validation_mse_improved'], f'seed {seed}: target loss did not improve'
+              assert len(m['leave_one_family_out']) == 4
+              assert m['acceptance']['all_metrics_finite']
+              assert m['acceptance']['neural_only_beats_or_matches_baseline_on_every_family'], f'seed {seed}: neural-only baseline regression'
+              assert m['acceptance']['promote_candidate'], f'seed {seed}: held-out regression gate rejected candidate'
+              for family in families:
+                  for method in ('search_only','neural_only','hybrid'):
+                      score=m['held_out_scenarios'][family][method]
+                      assert 0 <= score['success_rate'] <= 1
+                      assert math.isfinite(score['mean_return'])
+              summaries[seed]={
+                  'checkpoint_bytes':model.stat().st_size,
+                  'train_states':m['training']['neural_distillation']['train_states'],
+                  'target_states':m['training']['target_generation']['unique_target_states'],
+                  'target_mse':m['training']['neural_distillation']['final_validation_mse'],
+                  'neural_vs_baseline':m['acceptance']['neural_only_vs_baseline_return_deltas'],
+                  'leave_one_family_out_min_delta':m['acceptance']['leave_one_family_out_hybrid_min_delta'],
+                  'held_out':{
+                      family:{
+                          method:{
+                              'return':m['held_out_scenarios'][family][method]['mean_return'],
+                              'success_rate':m['held_out_scenarios'][family][method]['success_rate'],
+                          }
+                          for method in ('search_only','neural_only','hybrid')
+                      } for family in families
+                  },
+              }
+          Path('/tmp/strategic_multi_seed_summary.json').write_text(json.dumps(summaries,indent=2))
+          print(json.dumps(summaries,indent=2))
+          print('All three independent training seeds passed the held-out promotion gates.')
+          PY
+      - name: Smoke-test Android/Termux inference CLI
+        run: |
+          python -m strategic_ai.general_cli --model artifacts/strategic_general_neural.json --family resource_allocation --mode hybrid --simulations 16 --horizon 8 > /tmp/resource.json
+          python -m strategic_ai.general_cli --model artifacts/strategic_general_neural.json --family scheduling --mode neural --simulations 16 --horizon 8 > /tmp/scheduling.json
+          python -m strategic_ai.general_cli --model artifacts/strategic_general_neural.json --family route_planning --mode hybrid --simulations 16 --horizon 8 > /tmp/route.json
+          python -m strategic_ai.general_cli --model artifacts/strategic_general_neural.json --family adversarial --mode hybrid --simulations 16 --horizon 8 > /tmp/adversarial.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for family in ('resource','scheduling','route','adversarial'):
+              result=json.loads(Path(f'/tmp/{family}.json').read_text())
+              assert result['decision'].get('best_action') is not None, family
+              assert result['family'] in ('resource_allocation','scheduling','route_planning','adversarial')
+          print('All four JSON inference CLI smoke tests passed.')
           PY
       - uses: actions/upload-artifact@v4
         with:
@@ -102,7 +150,11 @@ jobs:
             tools/strategic-ai/artifacts/strategic_policy.json
             tools/strategic-ai/artifacts/strategic_neural.json
             tools/strategic-ai/artifacts/strategic_general_neural.json
+            tools/strategic-ai/artifacts/strategic_general_neural_seed777.json
+            tools/strategic-ai/artifacts/strategic_general_neural_seed2026.json
             tools/strategic-ai/artifacts/metrics.json
             tools/strategic-ai/artifacts/general_metrics.json
+            tools/strategic-ai/artifacts/general_metrics_seed777.json
+            tools/strategic-ai/artifacts/general_metrics_seed2026.json
           if-no-files-found: error
           retention-days: 30
