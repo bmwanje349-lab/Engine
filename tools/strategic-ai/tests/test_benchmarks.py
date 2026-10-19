@@ -25,8 +25,10 @@ class BenchmarkFamilyTests(unittest.TestCase):
         expected_ids = [0, 1, 2, 3]
         for problem, domain_id in zip(problems, expected_ids):
             state = problem.initial_state()
-            self.assertEqual(len(problem.features(state)), 11)
-            self.assertEqual(problem.features(state)[4], domain_id)
+            features = problem.features(state)
+            self.assertEqual(len(features), 32)
+            self.assertEqual(features[16 + domain_id], 1.0)
+            self.assertEqual(sum(features[16:20]), 1.0)
             self.assertTrue(problem.actions(state))
 
     def test_single_agent_search_works_on_all_planning_families(self):
@@ -73,7 +75,7 @@ class BenchmarkFamilyTests(unittest.TestCase):
             action = problem.actions(state)[0]
             state, reward, _done, _info = problem.step(state, action, rng)
             self.assertTrue(-100 <= reward <= 100)
-        self.assertEqual(len(problem.features(state)), 11)
+        self.assertEqual(len(problem.features(state)), 32)
 
     def test_nim_search_targets_are_minimax_consistent(self):
         self.assertEqual(nim_value(6), -1.0)
