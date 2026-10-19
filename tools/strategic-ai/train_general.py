@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from functools import lru_cache
 import json
 import math
 import random
@@ -61,6 +62,40 @@ def _choose_neural(problem, state, neural):
 
 def _target_key(scenario_id, features):
     return f"{scenario_id}|{encode_features(features)}"
+
+
+def exact_action_values(problem, state, gamma: float = 0.97):
+    """Return exact discounted Q(s,a) for small deterministic planning domains.
+
+    Resource allocation and scheduling have finite, deterministic transitions
+    and compact state spaces, so dynamic programming yields a stronger teacher
+    than noisy rollout labels. Route planning remains stochastic and uses PUCT.
+    """
+    if getattr(problem, "family", None) not in {"resource_allocation", "scheduling"}:
+        raise ValueError("exact dynamic-programming labels are only enabled for deterministic domains")
+    if not 0.0 < gamma <= 1.0:
+        raise ValueError("gamma must be in (0, 1]")
+
+    @lru_cache(maxsize=None)
+    def state_value(current):
+        legal = list(problem.actions(current))
+        if not legal:
+            return 0.0
+        best = -float("inf")
+        for action in legal:
+            next_state, reward, done, _info = problem.step(current, action, random.Random(0))
+            candidate = float(reward) + (0.0 if done else gamma * state_value(next_state))
+            if candidate > best:
+                best = candidate
+        return best if math.isfinite(best) else 0.0
+
+    result = {}
+    for action in problem.actions(state):
+        next_state, reward, done, _info = problem.step(state, action, random.Random(0))
+        result[action] = float(reward) + (0.0 if done else gamma * state_value(next_state))
+    if not result or not all(math.isfinite(value) for value in result.values()):
+        raise ValueError("exact dynamic-programming oracle produced invalid action values")
+    return result
 
 
 def collect_search_targets(seed: int, target_simulations: int, target_horizon: int,
