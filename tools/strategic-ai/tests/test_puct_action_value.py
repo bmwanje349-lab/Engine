@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from strategic_ai.action_encoding import encode_action_features
+from strategic_ai.action_encoding import RESOURCE_ACTIONS, encode_action_features
 from strategic_ai.benchmarks import NimProblem, ResourceAllocationProblem, RoutePlanningProblem, encode_features, nim_action_values, nim_hybrid_action_values
 from strategic_ai.general_neural import GeneralNeuralPolicy, normalized_action_prior
 from strategic_ai.search import SearchTree, plan
@@ -89,10 +89,10 @@ class PuctAndActionValueTests(unittest.TestCase):
         route = RoutePlanningProblem(12)
         resource_features = resource.features(resource.initial_state())
         route_features = route.features(route.initial_state())
-        self.assertEqual(len(encode_action_features(resource_features, "UP")), 8)
+        self.assertEqual(len(encode_action_features(resource_features, RESOURCE_ACTIONS[0])), 8)
         self.assertNotEqual(
             encode_action_features(resource_features, "UP"),
-            encode_action_features(resource_features, "RIGHT"),
+            encode_action_features(resource_features, RESOURCE_ACTIONS[1]),
         )
         self.assertNotEqual(
             encode_action_features(route_features, "UP"),
