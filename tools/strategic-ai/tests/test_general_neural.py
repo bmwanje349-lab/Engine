@@ -15,7 +15,8 @@ class GeneralNeuralDomainCoverageTests(unittest.TestCase):
             problem = ResourceAllocationProblem(seed)
             key = encode_features(problem.features(problem.initial_state()))
             targets[key] = {
-                RESOURCE_ACTIONS[0]: 1.0, RESOURCE_ACTIONS[1]: 2.0, RESOURCE_ACTIONS[2]: 0.0,\n                RESOURCE_ACTIONS[3]: -1.0, RESOURCE_ACTIONS[4]: -0.5,
+                RESOURCE_ACTIONS[0]: 1.0, RESOURCE_ACTIONS[1]: 2.0, RESOURCE_ACTIONS[2]: 0.0,
+                RESOURCE_ACTIONS[3]: -1.0, RESOURCE_ACTIONS[4]: -0.5,
             }
             if len(targets) >= 60:
                 break
