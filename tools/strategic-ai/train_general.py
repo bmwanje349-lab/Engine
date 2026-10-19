@@ -16,7 +16,7 @@ from strategic_ai.benchmarks import (
     nim_hybrid_action_values,
 )
 from strategic_ai.gridworld import ACTIONS
-from strategic_ai.general_neural import GeneralNeuralPolicy, _split_target_key
+from strategic_ai.general_neural import GeneralNeuralPolicy, _split_target_key, normalized_action_prior
 from strategic_ai.search import SearchTree, plan
 
 
@@ -38,7 +38,9 @@ def _prior(problem, state, action, neural):
     features = problem.features(state)
     if hasattr(neural, "supports_features") and not neural.supports_features(features):
         return 0.0
-    return _neural_values(problem, state, neural).get(action, 0.0)
+    # Normalize Q(s,a) against this state's legal alternatives before using
+    # it as a prior; raw rewards vary sharply across domains.
+    return normalized_action_prior(_neural_values(problem, state, neural), action)
 
 
 def _leaf_value(problem, state, neural):
@@ -98,7 +100,7 @@ def collect_search_targets(seed: int, target_simulations: int, target_horizon: i
                 result = plan(
                     problem, state, simulations=target_simulations, horizon=target_horizon,
                     seed=problem_seed + step_index * 13, top_k=5,
-                    action_prior=prior, prior_weight=(1.0 if prior is not None else 0.0),
+                    action_prior=prior, prior_weight=(0.75 if prior is not None else 0.0),
                     value_evaluator=value_evaluator, root_noise=(0.20 if guide is not None else 0.0),
                     tree=tree,
                 )
@@ -178,7 +180,7 @@ def _episode(problem, family, method, neural, seed, simulations, horizon):
             result = plan(
                 problem, state, simulations=simulations, horizon=horizon,
                 seed=seed + steps * 17, top_k=5, action_prior=prior,
-                prior_weight=(1.0 if prior is not None else 0.0),
+                prior_weight=(0.75 if prior is not None else 0.0),
                 value_evaluator=value_evaluator, tree=tree,
             )
             visits += int(result.get("root_visits", 0))
