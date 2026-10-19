@@ -7,7 +7,7 @@ from strategic_ai.action_encoding import RESOURCE_ACTIONS, actions_for_features,
 from strategic_ai.benchmarks import NimProblem, ResourceAllocationProblem, RoutePlanningProblem, SchedulingProblem, encode_features, nim_action_values, nim_hybrid_action_values
 from strategic_ai.general_neural import GeneralNeuralPolicy, normalized_action_prior
 from strategic_ai.search import SearchTree, plan
-from train_general import _ci95, _t_critical_95
+from train_general import _ci95, _t_critical_95, exact_action_values
 
 
 class TinyGraph:
@@ -36,6 +36,19 @@ class TinyGraph:
 
 
 class PuctAndActionValueTests(unittest.TestCase):
+    def test_exact_bellman_teacher_matches_successor_values(self):
+        gamma = 0.97
+        for family in ("resource_allocation", "scheduling"):
+            problem = (ResourceAllocationProblem(37) if family == "resource_allocation"
+                       else SchedulingProblem(37, difficulty=2))
+            state = problem.initial_state()
+            values = exact_action_values(problem, state, gamma=gamma)
+            self.assertEqual(set(values), set(problem.actions(state)))
+            self.assertTrue(all(math.isfinite(value) for value in values.values()))
+            best = max(values, key=values.get)
+            next_state, reward, done, _info = problem.step(state, best, __import__("random").Random(0))
+            future = 0.0 if done else gamma * max(exact_action_values(problem, next_state, gamma=gamma).values())
+            self.assertAlmostEqual(values[best], reward + future, places=6)
     def test_confidence_intervals_use_finite_sample_student_t(self):
         critical = _t_critical_95(39)
         self.assertGreater(critical, 2.01)
