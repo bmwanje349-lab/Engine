@@ -316,13 +316,24 @@ jobs:
           assert net['validation_mse_improved'], 'scenario-held-out target loss did not improve'
           assert len(metrics['leave_one_family_out']) == 4
           assert all('neural_only_minus_random_ci95_lower' in row for row in metrics['leave_one_family_out'])
+          assert net['balanced_domain_training']
+          assert set(net['domain_training_counts']) == {'resource_allocation', 'scheduling', 'route_planning', 'adversarial'}
+          assert set(net['validation_mse_by_domain']).issubset(set(net['domain_training_counts']))
           acceptance = metrics['acceptance']
           assert acceptance['scenario_disjoint_validation']
           assert acceptance['all_metrics_finite']
           assert acceptance['neural_only_beats_or_matches_random_on_every_family']
           assert acceptance['hybrid_lower_confidence_bound_beats_search_margin']
           assert acceptance['leave_one_family_out_safe_fallback_pass']
-          assert acceptance['promote_candidate'], 'challenger failed promotion gates'
+          assert acceptance['stress_metrics_finite']
+          assert acceptance['stress_neural_lower_confidence_bound_beats_random_on_every_family']
+          assert acceptance['stress_hybrid_lower_confidence_bound_beats_search_margin']
+          assert set(metrics['stress_held_out_scenarios']) == {'resource_allocation', 'scheduling', 'route_planning'}
+          assert acceptance['promote_candidate'], 'challenger failed stress or promotion gates'
+          for family, stress_scores in metrics['stress_held_out_scenarios'].items():
+              for method in ('search_only', 'neural_only', 'hybrid', 'random'):
+                  assert stress_scores[method]['episodes'] >= 40
+                  assert math.isfinite(stress_scores[method]['mean_return'])
           for family in ('resource_allocation', 'scheduling', 'route_planning', 'adversarial'):
               for method in ('search_only', 'neural_only', 'hybrid', 'random'):
                   scores = metrics['held_out_scenarios'][family][method]
