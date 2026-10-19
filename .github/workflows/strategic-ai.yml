@@ -322,7 +322,15 @@ jobs:
           assert acceptance['neural_only_beats_or_matches_random_on_every_family']
           assert acceptance['hybrid_lower_confidence_bound_beats_search_margin']
           assert acceptance['leave_one_family_out_safe_fallback_pass']
-          assert acceptance['promote_candidate'], 'challenger failed promotion gates'
+          assert acceptance['stress_metrics_finite']
+          assert acceptance['stress_neural_only_beats_or_matches_random_on_every_family']
+          assert acceptance['stress_hybrid_lower_confidence_bound_beats_search_margin']
+          assert set(metrics['stress_held_out_scenarios']) == {'resource_allocation', 'scheduling', 'route_planning'}
+          for family, stress_scores in metrics['stress_held_out_scenarios'].items():
+              for method in ('search_only', 'neural_only', 'hybrid', 'random'):
+                  assert stress_scores[method]['episodes'] >= 40
+                  assert math.isfinite(stress_scores[method]['mean_return'])
+          assert acceptance['promote_candidate'], 'challenger failed stress or promotion gates'
           for family in ('resource_allocation', 'scheduling', 'route_planning', 'adversarial'):
               for method in ('search_only', 'neural_only', 'hybrid', 'random'):
                   scores = metrics['held_out_scenarios'][family][method]
