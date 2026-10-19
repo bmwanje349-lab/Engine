@@ -8,7 +8,7 @@ import sys
 from .action_encoding import encode_action_features
 from .benchmarks import FAMILIES, make_problem, nim_action_values, nim_hybrid_action_values
 from .gridworld import ACTIONS
-from .general_neural import GeneralNeuralPolicy
+from .general_neural import GeneralNeuralPolicy, normalized_action_prior
 from .search import SearchTree, plan
 
 
@@ -87,15 +87,13 @@ def main():
                     features = problem.features(s)
                     if hasattr(neural, "supports_features") and not neural.supports_features(features):
                         return 0.0
-                    return neural.predict_action_value(
-                        features, encode_action_features(features, action), action_name=action
-                    )
+                    return normalized_action_prior(_action_values(problem, s, neural), action)
                 value_evaluator = lambda s: _leaf_value(problem, s, neural)
             tree = SearchTree()
             result = plan(
                 problem, state, simulations=args.simulations, horizon=args.horizon,
                 seed=args.seed, top_k=5, action_prior=prior,
-                prior_weight=(1.0 if prior is not None else 0.0),
+                prior_weight=(0.75 if prior is not None else 0.0),
                 value_evaluator=value_evaluator, tree=tree,
             )
             decision = result
