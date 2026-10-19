@@ -347,6 +347,11 @@ def leave_one_family_out(targets, *, seed, epochs, eval_episodes, simulations, h
             family, fold_model, seed=seed + 200000 + heldout_id * 1000,
             episodes=eval_episodes, simulations=simulations, horizon=horizon)
         comparison = evaluated["paired_comparisons"]["hybrid_minus_search"]
+        neural_transfer = evaluated["paired_comparisons"]["neural_minus_random"]
+        fold_problem = make_problem(family, seed + 200000 + heldout_id * 1000)
+        fallback_used = not fold_model.supports_features(
+            fold_problem.features(fold_problem.initial_state())
+        )
         records.append({
             "held_out_family": family,
             "training_families": [name for name in FAMILIES if name != family],
@@ -355,6 +360,10 @@ def leave_one_family_out(targets, *, seed, epochs, eval_episodes, simulations, h
             "validation_scenarios": fold_metrics["validation_scenarios"],
             "neural_validation_mse": fold_metrics["final_validation_mse"],
             "held_out_metrics": evaluated,
+            "hybrid_falls_back_without_held_out_training": fallback_used,
+            "neural_only_minus_random_return": neural_transfer["mean_delta"],
+            "neural_only_minus_random_ci95_lower": neural_transfer["ci95_lower"],
+            "neural_only_minus_random_ci95_upper": neural_transfer["ci95_upper"],
             "hybrid_minus_search_return": comparison["mean_delta"],
             "hybrid_minus_search_ci95_lower": comparison["ci95_lower"],
             "hybrid_minus_search_ci95_upper": comparison["ci95_upper"],
@@ -479,8 +488,23 @@ def main():
         "neural_only_beats_or_matches_random_on_every_family": neural_baseline_pass,
         "held_out_hybrid_vs_search_paired_deltas": hybrid_vs_search,
         "hybrid_lower_confidence_bound_beats_search_margin": search_lcb_pass,
-        "leave_one_family_out_hybrid_min_ci95_lower": fold_lcb,
-        "leave_one_family_out_lower_bound_pass": fold_lcb_pass,
+        "leave_one_family_out_safe_fallback_min_ci95_lower": fold_lcb,
+        "leave_one_family_out_safe_fallback_pass": fold_lcb_pass,
+        "leave_one_family_out_neural_only_vs_random_paired_return_deltas": {
+            row["held_out_family"]: {
+                "mean_delta": row["neural_only_minus_random_return"],
+                "ci95_lower": row["neural_only_minus_random_ci95_lower"],
+                "ci95_upper": row["neural_only_minus_random_ci95_upper"],
+            }
+            for row in folds
+        },
+        "leave_one_family_out_neural_only_beats_or_matches_random_on_every_family": all(
+            row["neural_only_minus_random_return"] >= 0.0 for row in folds
+        ),
+        "leave_one_family_out_interpretation": (
+            "safe-fallback gate checks hybrid non-regression when the held-out family is unseen; "
+            "neural-only versus random is reported separately as a zero-shot transfer diagnostic"
+        ),
         "champion_comparison": champion_comparison,
         "all_metrics_finite": metrics_are_finite,
         "promote_candidate": bool(
