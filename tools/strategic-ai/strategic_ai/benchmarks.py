@@ -397,7 +397,7 @@ def nim_hybrid_action_values(stones: int, neural, *, depth: int = 5) -> tuple[di
         return nim_action_values(stones), 0
     nodes = 0
 
-    def negamax(n: int, remaining: int) float:
+    def negamax(n: int, remaining: int) -> float:
         nonlocal nodes
         nodes += 1
         if n <= 0:
