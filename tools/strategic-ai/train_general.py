@@ -15,7 +15,6 @@ from strategic_ai.benchmarks import (
     FAMILIES, NimProblem, encode_features, make_problem, nim_action_values,
     nim_hybrid_action_values,
 )
-from strategic_ai.gridworld import ACTIONS
 from strategic_ai.general_neural import GeneralNeuralPolicy, _split_target_key, normalized_action_prior
 from strategic_ai.search import SearchTree, plan
 
@@ -57,7 +56,7 @@ def _choose_neural(problem, state, neural):
     if not actions:
         return None
     values = _neural_values(problem, state, neural)
-    return max(actions, key=lambda action: (values[action], -ACTIONS.index(action)))
+    return max(actions, key=lambda action: (values[action], -actions.index(action)))
 
 
 def _target_key(scenario_id, features):
@@ -161,10 +160,10 @@ def _episode(problem, family, method, neural, seed, simulations, horizon):
             elif method == "hybrid":
                 values, nodes = nim_hybrid_action_values(stones, neural, depth=5)
                 visits += nodes
-                action = max(actions, key=lambda a: (values[a], -ACTIONS.index(a)))
+                action = max(actions, key=lambda a: (values[a], -actions.index(a)))
             else:
                 values = nim_action_values(stones)
-                action = max(actions, key=lambda a: (values[a], -ACTIONS.index(a)))
+                action = max(actions, key=lambda a: (values[a], -legal.index(a)))
         elif method == "random":
             action = rng.choice(actions)
         elif method == "neural":
