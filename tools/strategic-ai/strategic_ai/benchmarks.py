@@ -328,7 +328,7 @@ class RoutePlanningProblem:
                    (self.goal[1] - y) / max(1, self.height - 1),
                    energy / self.max_energy, steps / self.max_steps]
         expected_cost = [min(1.0, costs[i] + 0.25 * risks[i]) for i in range(4)]
-        distance_gain = [max(-1.0, min(1.0, (current_distance - d) / max(4.0, self.width - 1)) for d in [current_distance if p is None else distance(p)]
+        distance_gain = [max(-1.0, min(1.0, (current_distance - (current_distance if point is None else distance(point))) / max(4.0, self.width - 1))) for point in neighbors]
         return tuple(legal + costs + risks + next_distance + domain + context + expected_cost + distance_gain)
 
 
