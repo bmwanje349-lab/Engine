@@ -140,7 +140,8 @@ def plan(problem: PlanningProblem, state: Any, *, simulations: int = 400,
             legal = list(problem.actions(current))
             if not legal:
                 break
-            if action_prior is not None and rng.random() < 0.65:
+            # Keep a learned prior advisory during rollouts; a bad transfer prior must not dominate search.
+            if action_prior is not None and rng.random() < 0.25:
                 action = max(legal, key=lambda a: _safe_prior(action_prior, current, a))
             else:
                 action = rng.choice(legal)
