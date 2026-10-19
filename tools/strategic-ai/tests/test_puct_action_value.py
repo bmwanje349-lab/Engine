@@ -2,7 +2,7 @@ import math
 import unittest
 
 from strategic_ai.action_encoding import encode_action_features
-from strategic_ai.benchmarks import (NimProblem, ResourceAllocationProblem, RoutePlanningProblem,\n                                    encode_features, nim_action_values, nim_hybrid_action_values)
+from strategic_ai.benchmarks import NimProblem, ResourceAllocationProblem, RoutePlanningProblem, encode_features, nim_action_values, nim_hybrid_action_values
 from strategic_ai.general_neural import GeneralNeuralPolicy
 from strategic_ai.search import SearchTree, plan
 
