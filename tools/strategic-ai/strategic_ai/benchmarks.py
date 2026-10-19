@@ -20,9 +20,13 @@ class ResourceAllocationProblem:
     domain_id = 0
     max_decisions = 9
 
-    def __init__(self, seed: int):
+    def __init__(self, seed: int, *, difficulty: int = 0):
+        if difficulty not in (0, 1, 2):
+            raise ValueError("difficulty must be 0, 1 or 2")
         rng = random.Random(seed)
-        self.demands = tuple(2 + rng.randrange(3) for _ in range(4))
+        # Higher difficulty increases demand while preserving the compact
+        # observation/action schema, allowing genuine OOD difficulty tests.
+        self.demands = tuple(2 + rng.randrange(3 + difficulty) for _ in range(4))
         self.values = tuple(1 + rng.randrange(5) for _ in range(4))
         self.budget = 6 + rng.randrange(3)
         marginals = sorted(
@@ -109,16 +113,27 @@ class SchedulingProblem:
     domain_id = 1
     max_time = 11
 
-    def __init__(self, seed: int):
+    def __init__(self, seed: int, *, difficulty: int = 0):
+        if difficulty not in (0, 1, 2):
+            raise ValueError("difficulty must be 0, 1 or 2")
         rng = random.Random(seed)
         self.durations = tuple(1 + rng.randrange(3) for _ in range(4))
         self.priorities = tuple(1 + rng.randrange(4) for _ in range(4))
-        self.deadlines = (
-            3 + rng.randrange(2),
-            5 + rng.randrange(2),
-            5 + rng.randrange(2),
-            9 + rng.randrange(2),
-        )
+        if difficulty == 0:
+            self.deadlines = (
+                3 + rng.randrange(2), 5 + rng.randrange(2),
+                5 + rng.randrange(2), 9 + rng.randrange(2),
+            )
+        elif difficulty == 1:
+            self.deadlines = (
+                2 + rng.randrange(2), 4 + rng.randrange(2),
+                4 + rng.randrange(2), 7 + rng.randrange(3),
+            )
+        else:
+            self.deadlines = (
+                1 + rng.randrange(2), 3 + rng.randrange(2),
+                3 + rng.randrange(2), 5 + rng.randrange(3),
+            )
         self.dependencies = (0, 1, 1, (1 << 1) | (1 << 2))
 
     def initial_state(self):
@@ -210,20 +225,26 @@ class RoutePlanningProblem:
     max_energy = 18
     max_steps = 24
 
-    def __init__(self, seed: int):
+    def __init__(self, seed: int, *, difficulty: int = 0):
+        if difficulty not in (0, 1, 2):
+            raise ValueError("difficulty must be 0, 1 or 2")
         rng = random.Random(seed)
-        self.start, self.goal = (0, 0), (4, 4)
+        self.width = self.height = 5 + 2 * difficulty
+        self.max_energy = 18 + 6 * difficulty
+        self.max_steps = 24 + 12 * difficulty
+        self.start, self.goal = (0, 0), (self.width - 1, self.height - 1)
         corridor = ({(x, 0) for x in range(self.width)}
-                    | {(4, y) for y in range(self.height)})
+                    | {(self.width - 1, y) for y in range(self.height)})
         candidates = [(x, y) for y in range(self.height) for x in range(self.width)
                       if (x, y) not in corridor and (x, y) not in (self.start, self.goal)]
         rng.shuffle(candidates)
-        self.walls = frozenset(candidates[:3])
-        self.rough = { (x, y): 1 + rng.randrange(2)
-                       for y in range(self.height) for x in range(self.width)
-                       if (x, y) not in self.walls }
-        hazard_candidates = [p for p in candidates[3:] if p not in self.walls]
-        self.hazards = frozenset(hazard_candidates[:3])
+        wall_count = 3 + 3 * difficulty
+        self.walls = frozenset(candidates[:wall_count])
+        self.rough = {(x, y): 1 + rng.randrange(2)
+                      for y in range(self.height) for x in range(self.width)
+                      if (x, y) not in self.walls}
+        hazard_candidates = [p for p in candidates[wall_count:] if p not in self.walls]
+        self.hazards = frozenset(hazard_candidates[:3 + 2 * difficulty])
 
     def initial_state(self):
         return (0, 0, self.max_energy, 0)
@@ -299,13 +320,15 @@ class RoutePlanningProblem:
         risks = [0.0 if point is None else float(point in self.hazards) for point in neighbors]
         distance = lambda point: abs(self.goal[0] - point[0]) + abs(self.goal[1] - point[1])
         current_distance = distance((x, y))
+        max_distance = float((self.width - 1) + (self.height - 1))
         next_distance = [current_distance if point is None else distance(point) for point in neighbors]
-        next_distance = [max(0.0, min(1.0, d / 8.0)) for d in next_distance]
+        next_distance = [max(0.0, min(1.0, d / max_distance)) for d in next_distance]
         domain = [0.0, 0.0, 1.0, 0.0]
-        context = [(self.goal[0] - x) / 4.0, (self.goal[1] - y) / 4.0,
+        context = [(self.goal[0] - x) / max(1, self.width - 1),
+                   (self.goal[1] - y) / max(1, self.height - 1),
                    energy / self.max_energy, steps / self.max_steps]
         expected_cost = [min(1.0, costs[i] + 0.25 * risks[i]) for i in range(4)]
-        distance_gain = [max(-1.0, min(1.0, (current_distance - d) / 4.0)) for d in [current_distance if p is None else distance(p) for p in neighbors]]
+        distance_gain = [max(-1.0, min(1.0, (current_distance - d) / max(4.0, self.width - 1)) for d in [current_distance if p is None else distance(p)]
         return tuple(legal + costs + risks + next_distance + domain + context + expected_cost + distance_gain)
 
 
@@ -397,13 +420,16 @@ def nim_hybrid_action_values(stones: int, neural, *, depth: int = 5) -> tuple[di
     return values, int(stones) + 1
 
 
-def make_problem(family: str, seed: int):
+def make_problem(family: str, seed: int, *, difficulty: int = 0):
+    """Instantiate a deterministic base, medium or shifted stress problem."""
+    if difficulty not in (0, 1, 2):
+        raise ValueError("difficulty must be 0, 1 or 2")
     if family == "resource_allocation":
-        return ResourceAllocationProblem(seed)
+        return ResourceAllocationProblem(seed, difficulty=difficulty)
     if family == "scheduling":
-        return SchedulingProblem(seed)
+        return SchedulingProblem(seed, difficulty=difficulty)
     if family == "route_planning":
-        return RoutePlanningProblem(seed)
+        return RoutePlanningProblem(seed, difficulty=difficulty)
     if family == "adversarial":
         return NimProblem(1 + (abs(int(seed)) % 36))
     raise ValueError(f"unknown benchmark family: {family}")
