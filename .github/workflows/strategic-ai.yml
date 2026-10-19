@@ -77,14 +77,14 @@ jobs:
               else
                 ep=250
                 sim=48
-                scenarios=24
+                scenarios=48
                 eval_ep=60
               fi
               ;;
             pull_request)
               ep=250
               sim=48
-              scenarios=24
+              scenarios=48
               eval_ep=60
               ;;
             schedule)
@@ -294,7 +294,7 @@ jobs:
             champion_arg=(--champion /tmp/strategic-champion/strategic_general_neural.json)
           fi
           python train_general.py \
-            --seed "$SEED" --epochs 45 --fold-epochs 10 \
+            --seed "$SEED" --epochs 60 --fold-epochs 12 \
             --episodes-per-family "$EVAL_EPISODES" \
             --target-simulations 32 --eval-simulations 64 \
             --target-horizon 10 --eval-horizon 12 \
