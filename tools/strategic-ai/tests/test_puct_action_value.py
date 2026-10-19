@@ -1,8 +1,8 @@
 import math
 import unittest
 
-from strategic_ai.action_encoding import RESOURCE_ACTIONS, encode_action_features
-from strategic_ai.benchmarks import NimProblem, ResourceAllocationProblem, RoutePlanningProblem, encode_features, nim_action_values, nim_hybrid_action_values
+from strategic_ai.action_encoding import RESOURCE_ACTIONS, actions_for_features, encode_action_features
+from strategic_ai.benchmarks import NimProblem, ResourceAllocationProblem, RoutePlanningProblem, SchedulingProblem, encode_features, nim_action_values, nim_hybrid_action_values
 from strategic_ai.general_neural import GeneralNeuralPolicy, normalized_action_prior
 from strategic_ai.search import SearchTree, plan
 from train_general import _ci95, _t_critical_95
@@ -113,6 +113,38 @@ class PuctAndActionValueTests(unittest.TestCase):
             )
             self.assertEqual(hybrid, exact, f"pile={stones}")
             self.assertIn(max(exact, key=exact.get), NimProblem(stones).actions(stones))
+
+    def test_domain_calibration_is_selected_and_round_trips(self):
+        zeros_w1 = [[0.0] * 96 for _ in range(40)]
+        zeros_w2 = [[0.0] * 64 for _ in range(96)]
+        q_means = (1.0, 2.0, 3.0, 4.0)
+        v_means = (-1.0, -2.0, -3.0, -4.0)
+        model = GeneralNeuralPolicy(
+            zeros_w1, [0.0] * 96, zeros_w2, [0.0] * 64,
+            [0.0] * 64, [0.0], [0.0] * 64, [0.0],
+            trained_domains=(0, 1, 2, 3),
+            q_mean=q_means, q_scale=(1.0, 1.0, 1.0, 1.0),
+            value_mean=v_means, value_scale=(1.0, 1.0, 1.0, 1.0),
+        )
+        problems = (
+            ResourceAllocationProblem(14), SchedulingProblem(14),
+            RoutePlanningProblem(14), NimProblem(14),
+        )
+        for domain_id, problem in enumerate(problems):
+            features = problem.features(problem.initial_state())
+            action = actions_for_features(features)[0]
+            self.assertEqual(
+                model.predict_action_value(features, encode_action_features(features, action)),
+                q_means[domain_id],
+            )
+            self.assertEqual(model.predict_value_features(features), v_means[domain_id])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "calibrated.json"
+            model.save(path)
+            loaded = GeneralNeuralPolicy.load(path)
+            features = problems[2].features(problems[2].initial_state())
+            action = actions_for_features(features)[0]
+            self.assertEqual(loaded.predict_action_value(features, action), q_means[2])
 
     def test_action_encoder_describes_state_action_pairs(self):
         resource = ResourceAllocationProblem(12)
