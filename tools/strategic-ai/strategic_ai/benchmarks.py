@@ -141,7 +141,7 @@ class SchedulingProblem:
         mask, clock, wait_used, _decisions, _late_mask = state
         choices = [SCHEDULING_ACTIONS[i] for i in self._ready(mask)]
         if not wait_used and clock < self.max_time - 1:
-            choices.append("REST")
+            choices.append(SCHEDULING_ACTIONS[4])
         return tuple(choices)
 
     def step(self, state, action, rng):
