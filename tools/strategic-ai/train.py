@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""Train the Strategic Reasoning AI policy prior and benchmark look-ahead search."""
+from __future__ import annotations
+import argparse
+import json
+import random
+import statistics
+import time
+from pathlib import Path
+
+from strategic_ai.gridworld import GridWorld, make_world
+from strategic_ai.learning import QLearner, state_features
+from strategic_ai.neural import NeuralPolicy
+from strategic_ai.search import plan
+
+
+def random_episode(world: GridWorld, seed: int) -> dict:
+    rng, state = random.Random(seed), world.initial_state()
+    total, success, steps = 0.0, False, 0
+    while not world.terminal(state) and steps < world.max_steps:
+        legal = list(world.actions(state))
+        if not legal:
+            break
+        state, reward, done, info = world.step(state, rng.choice(legal), rng)
+        total += reward
+        steps += 1
+        success |= bool(info.get("goal_reached"))
+        if done:
+            break
+    return {"return": total, "success": success, "steps": steps}
+
+
+def run_mcts_episode(world: GridWorld, model: QLearner, neural: NeuralPolicy, seed: int, simulations: int,
+                     horizon: int) -> dict:
+    rng, state = random.Random(seed), world.initial_state()
+    total, success, steps, planning_nodes = 0.0, False, 0, 0
+    while not world.terminal(state) and steps < world.max_steps:
+        result = plan(world, state, simulations=simulations, horizon=horizon,
+                      seed=rng.randrange(2**31), top_k=3,
+                      action_prior=lambda s, a: 0.5 * model.prior(world, s, a) + 0.5 * neural.prior(world, s, a),
+                      prior_weight=0.12)
+        action = result["best_action"]
+        if action is None:
+            break
+        planning_nodes += result["root_visits"]
+        state, reward, done, info = world.step(state, action, rng)
+        total += reward
+        steps += 1
+        success |= bool(info.get("goal_reached"))
+        if done:
+            break
+    return {"return": total, "success": success, "steps": steps, "search_visits": planning_nodes}
+
+
+def run_neural_episode(world: GridWorld, neural: NeuralPolicy, seed: int) -> dict:
+    rng, state = random.Random(seed), world.initial_state()
+    total, success, steps = 0.0, False, 0
+    while not world.terminal(state) and steps < world.max_steps:
+        legal = list(world.actions(state))
+        if not legal:
+            break
+        values = neural.predict_features(state_features(world, state))
+        action = max(legal, key=lambda a: values[("UP", "RIGHT", "DOWN", "LEFT", "REST").index(a)])
+        state, reward, done, info = world.step(state, action, rng)
+        total += reward
+        steps += 1
+        success |= bool(info.get("goal_reached"))
+        if done:
+            break
+    return {"return": total, "success": success, "steps": steps}
+
+
+def summarize(rows: list[dict]) -> dict:
+    n = max(1, len(rows))
+    return {"episodes": len(rows),
+            "success_rate": round(sum(bool(x["success"]) for x in rows) / n, 4),
+            "mean_return": round(statistics.fmean(float(x["return"]) for x in rows), 5),
+            "mean_steps": round(statistics.fmean(float(x["steps"]) for x in rows), 3)}
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--episodes", type=int, default=500)
+    p.add_argument("--eval-episodes", type=int, default=20)
+    p.add_argument("--simulations", type=int, default=96)
+    p.add_argument("--horizon", type=int, default=18)
+    p.add_argument("--seed", type=int, default=410)
+    p.add_argument("--out", default="artifacts/strategic_policy.json")
+    p.add_argument("--metrics", default="artifacts/metrics.json")
+    args = p.parse_args()
+    if not 50 <= args.episodes <= 100000 or not 4 <= args.eval_episodes <= 1000:
+        raise SystemExit("episode count outside configured safe bounds")
+    if not 8 <= args.simulations <= 5000 or not 4 <= args.horizon <= 100:
+        raise SystemExit("search budget outside configured safe bounds")
+
+    started = time.time()
+    learner = QLearner(seed=args.seed)
+    # A small fixed curriculum gives the table repeat experience, while varied
+    # worlds prevent the learner from seeing just one action sequence.
+    curriculum = [make_world(args.seed + k) for k in (1, 2, 3, 4, 5)]
+    training_returns = []
+    for ep in range(args.episodes):
+        world = curriculum[ep % len(curriculum)] if ep % 4 else make_world(args.seed + 10000 + ep)
+        training_returns.append(learner.train_episode(world))
+
+    neural, neural_metrics = NeuralPolicy.distill(learner.q, epochs=35, seed=args.seed + 9)
+    neural_path = Path("artifacts/strategic_neural.json")
+    neural.save(neural_path)
+
+    learned_rows, neural_rows, random_rows, mcts_rows = [], [], [], []
+    # Fixed held-out seeds; different from the training map seeds.
+    for i in range(args.eval_episodes):
+        world = make_world(args.seed + 300000 + i)
+        learned_rows.append(learner.evaluate_episode(world, seed=args.seed + 400000 + i))
+        neural_rows.append(run_neural_episode(world, neural, args.seed + 450000 + i))
+        random_rows.append(random_episode(world, args.seed + 500000 + i))
+    # Search is more expensive; use a bounded subset and the same map seeds for
+    # a paired comparison against the random baseline.
+    mcts_count = min(args.eval_episodes, 12)
+    for i in range(mcts_count):
+        world = make_world(args.seed + 300000 + i)
+        mcts_rows.append(run_mcts_episode(world, learner, neural, args.seed + 700000 + i,
+                                          args.simulations, args.horizon))
+
+    output = Path(args.out)
+    learner.save(output)
+    metrics = {
+        "model": "StrategicReasoner-QTable-v1",
+        "training": {"episodes": args.episodes,
+                     "mean_return_first_20": round(statistics.fmean(x["return"] for x in training_returns[:min(20, len(training_returns))]), 5),
+                     "mean_return_last_20": round(statistics.fmean(x["return"] for x in training_returns[-min(20, len(training_returns)):]), 5),
+                     "epsilon_final": round(learner.epsilon, 5), "q_states": len(learner.q),
+                     "updates": learner.updates},
+        "held_out_random_policy": summarize(random_rows),
+        "held_out_learned_policy": summarize(learned_rows),
+        "held_out_neural_policy": summarize(neural_rows),
+        "held_out_mcts_policy": summarize(mcts_rows),
+        "held_out_mcts_comparison_random_policy": summarize(random_rows[:mcts_count]),
+        "neural_distillation": neural_metrics,
+        "neural_checkpoint": {"path": str(neural_path), "bytes": neural_path.stat().st_size},
+        "search": {"simulations_per_decision": args.simulations, "horizon": args.horizon,
+                   "mean_root_visits": round(statistics.fmean(x.get("search_visits", 0) / max(1, x["steps"]) for x in mcts_rows), 2)},
+        "checkpoint": {"path": str(output), "bytes": output.stat().st_size},
+        "runtime_seconds": round(time.time() - started, 2),
+        "validation_scope": "synthetic stochastic gridworld only; not evidence of general intelligence or real-world performance",
+        "random_baseline_beaten_on_return": summarize(learned_rows)["mean_return"] > summarize(random_rows)["mean_return"],
+        "hybrid_search_beats_random_on_return": summarize(mcts_rows)["mean_return"] > summarize(random_rows[:mcts_count])["mean_return"],
+    }
+    metrics_path = Path(args.metrics)
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    metrics_path.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(metrics, indent=2, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()
