@@ -1,4 +1,4 @@
-# Strategic Reasoning AI (experimental v2)
+# Strategic Reasoning AI (experimental v3)
 
 A separate planning and reinforcement-learning engine inside the Engine repository. It does not replace WiFiFix AI. The goal is to explore alternatives, score their downstream consequences, learn from stronger search targets, and promote checkpoints only when reproducible held-out evaluations pass.
 
@@ -22,7 +22,7 @@ From the `tools/strategic-ai` directory (Python 3.11+):
     python train.py --episodes 500 --eval-episodes 20 --simulations 96 --horizon 18
     python train_general.py --epochs 30 --fold-epochs 10 --episodes-per-family 6
 
-The normal GitHub Actions workflow runs the unit tests, trains the grid Q-table, distills its neural evaluator from independent MCTS targets, then trains the cross-domain evaluator and applies held-out regression gates. It uploads the model weights and JSON metrics as a `strategic-ai-v2-<run-number>` artifact for 30 days. A failed held-out gate intentionally prevents artifact publication.
+The normal GitHub Actions workflow runs unit tests, trains the grid Q-table, distills its neural evaluator from independent MCTS targets, then trains three cross-domain candidates with independent seeds (410, 777, and 2026). Every candidate must pass neural-vs-random comparisons on all four families, seeded held-out scenarios, validation-loss improvement, and four leave-one-family-out folds. The workflow also launches the inference CLI against all four families. It uploads the accepted checkpoints and metrics as a `strategic-ai-v3-<run-number>` artifact for 30 days. A failed training, regression, or CLI smoke-test gate intentionally prevents artifact publication.
 
 ## Compare inference methods
 
@@ -42,8 +42,8 @@ Install Python in Termux, download the latest successful workflow artifact from 
 ## Reading the metrics honestly
 
 - `artifacts/metrics.json` measures the original grid-world policy.
-- `artifacts/general_metrics.json` reports random, search-only, neural-only, and hybrid results for each held-out family, the search-generated training-target counts, neural validation loss, and four leave-one-family-out folds.
+- `artifacts/general_metrics.json` and the two `general_metrics_seed*.json` files report the three independent training runs. They include random, search-only, neural-only, and hybrid results per family, target-state counts, validation loss, and four leave-one-family-out folds.
 - Success rate and mean return describe only these seeded synthetic problems. The adversarial benchmark additionally reports exact minimax regret on held-out pile sizes.
-- A checkpoint is kept only if the MCTS-target validation loss improves and the held-out regression gates pass. Model size alone is never treated as evidence of intelligence.
+- A checkpoint is kept only if the MCTS-target validation loss improves, neural-only return is at least as good as random on every family, hybrid search avoids regressions on held-out families, and all three independently seeded candidates pass. A family not represented in the checkpoint's training domains is marked unsupported; hybrid mode falls back to search instead of trusting an out-of-domain neural prior. Model size alone is never treated as evidence of intelligence.
 
 Search quality still depends on the transition model, reward design, state features, rollout budget, and evaluation coverage. The engine explores multiple candidate futures, but it is an experimental planner—not a superintelligence, a pretrained general-reasoning model, or a substitute for verifying high-stakes decisions.
