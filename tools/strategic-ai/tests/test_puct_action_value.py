@@ -5,6 +5,7 @@ from strategic_ai.action_encoding import RESOURCE_ACTIONS, encode_action_feature
 from strategic_ai.benchmarks import NimProblem, ResourceAllocationProblem, RoutePlanningProblem, encode_features, nim_action_values, nim_hybrid_action_values
 from strategic_ai.general_neural import GeneralNeuralPolicy, normalized_action_prior
 from strategic_ai.search import SearchTree, plan
+from train_general import _ci95, _t_critical_95
 
 
 class TinyGraph:
@@ -33,6 +34,17 @@ class TinyGraph:
 
 
 class PuctAndActionValueTests(unittest.TestCase):
+    def test_confidence_intervals_use_finite_sample_student_t(self):
+        critical = _t_critical_95(39)
+        self.assertGreater(critical, 2.01)
+        self.assertLess(critical, 2.03)
+        interval = _ci95([1.0] * 40)
+        self.assertEqual(interval["n"], 40)
+        self.assertEqual(interval["mean"], 1.0)
+        self.assertEqual(interval["lower"], 1.0)
+        self.assertEqual(interval["upper"], 1.0)
+        self.assertGreater(_t_critical_95(9), _t_critical_95(39))
+
     def test_transposition_table_shares_identical_states_and_tree_can_advance(self):
         problem = TinyGraph(transposed=True)
         tree = SearchTree(max_nodes=1000)
