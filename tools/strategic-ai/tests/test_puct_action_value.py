@@ -53,6 +53,24 @@ class PuctAndActionValueTests(unittest.TestCase):
         self.assertLessEqual(abs(normalized_action_prior(scores, "A")), 2.0)
         self.assertEqual(normalized_action_prior({"A": 7.0, "B": 7.0}, "A"), 0.0)
 
+    def test_final_root_choice_uses_most_visited_child(self):
+        class CountProblem(TinyGraph):
+            def step(self, state, action, rng):
+                del rng
+                if state == "root":
+                    reward = 1.0 if action == "left" else 0.0
+                    return ("LEFT_END" if action == "left" else "RIGHT_END"), reward, True, {}
+                return state, 0.0, True, {}
+
+        result = plan(
+            CountProblem(), "root", simulations=80, horizon=4, seed=19,
+            action_prior=lambda _state, action: (5.0 if action == "left" else -5.0),
+            prior_weight=1.0,
+        )
+        visits = {row["first_action"]: row["visits"] for row in result["alternatives"]}
+        self.assertEqual(result["best_action"], max(visits, key=visits.get))
+        self.assertEqual(result["best_action"], "left")
+
     def test_puct_uses_net_priors_and_state_value_leaf_evaluator(self):
         problem = TinyGraph(transposed=False)
         tree = SearchTree()
